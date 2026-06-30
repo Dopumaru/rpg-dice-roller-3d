@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dados 3D RPG</title>
+  <meta name="description" content="Mesa arcana de rolagem 3D para campanhas de RPG." />
+  <meta name="theme-color" content="#0b0d1a" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=EB+Garamond:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand__logo"><svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 6 55 18.5v27L32 58 9 45.5v-27Z" fill="none" stroke="currentColor" stroke-width="2.4"></path><path d="M32 6v52M9 18.5 32 31l23-12.5" fill="none" stroke="currentColor" stroke-width="2.4"></path></svg></div>
+        <div><p class="eyebrow">Biblioteca Arcana</p><h1>Dados 3D RPG</h1></div>
+      </div>
+      <div class="topbar__actions">
+        <button type="button" class="icon-button" data-theme-toggle aria-label="Alternar tema">◐</button>
+        <button type="button" class="primary-button" id="roll-selected">Rolar seleção</button>
+      </div>
+    </header>
+    <main id="conteudo" class="layout">
+      <aside class="sidebar">
+        <section class="panel panel--glow">
+          <div class="panel__header"><p class="eyebrow">Comandos</p><h2>Dados disponíveis</h2></div>
+          <div class="dice-grid">
+            <button class="dice-button" data-dice="d4">d4</button>
+            <button class="dice-button" data-dice="d6">d6</button>
+            <button class="dice-button" data-dice="d8">d8</button>
+            <button class="dice-button" data-dice="d10">d10</button>
+            <button class="dice-button" data-dice="d12">d12</button>
+            <button class="dice-button" data-dice="d20">d20</button>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel__header"><p class="eyebrow">Notação</p><h2>Expressão de rolagem</h2></div>
+          <label class="field"><span>Comando</span><input id="dice-notation" type="text" value="1d20+5" placeholder="Ex: 2d6+3" /></label>
+          <button class="secondary-button" id="roll-notation">Executar expressão</button>
+        </section>
+        <section class="panel">
+          <div class="panel__header"><p class="eyebrow">Sessão</p><h2>Último resultado</h2></div>
+          <div class="result-card">
+            <span class="result-card__label">Saída atual</span>
+            <strong id="last-roll">Aguardando rolagem</strong>
+            <span id="last-total">Total: --</span>
+          </div>
+        </section>
+      </aside>
+      <section class="table-stage">
+        <div class="hero-card">
+          <div class="hero-copy">
+            <p class="eyebrow">Física real</p>
+            <h2>Mesa com Three.js + cannon-es</h2>
+            <p>Dados com colisão, gravidade, torque aleatório e detecção de face superior. Suporte a d4, d6, d8, d10, d12 e d20 com parser de expressões RPG.</p>
+          </div>
+          <div class="hero-meta">
+            <span class="tag">Three.js</span>
+            <span class="tag">cannon-es</span>
+            <span class="tag">Parser RPG</span>
+          </div>
+        </div>
+        <div class="canvas-shell">
+          <canvas id="dice-canvas" aria-label="Mesa 3D de rolagem"></canvas>
+          <div class="canvas-overlay">
+            <span class="status-dot"></span>
+            <p id="engine-status">Cena 3D carregada · pronto para rolar</p>
+          </div>
+        </div>
+        <div class="feature-strip">
+          <article class="feature-card"><p class="eyebrow">Módulo</p><h3>Dice Engine</h3><p>Geometrias específicas para cada tipo de dado e sincronização com os corpos físicos a cada frame.</p></article>
+          <article class="feature-card"><p class="eyebrow">Módulo</p><h3>Physics World</h3><p>Gravidade, bordas invisíveis, impulso e torque aleatórios com cannon-es e detecção de repouso.</p></article>
+          <article class="feature-card"><p class="eyebrow">Módulo</p><h3>Roll Parser</h3><p>Interpreta expressões como 3d6+2 ou 1d20 e lança a quantidade certa de dados na cena 3D.</p></article>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
