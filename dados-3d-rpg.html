@@ -1,1 +1,344 @@
-INLINE_PLACEHOLDER
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Dados 3D — RPG</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0;min-height:100vh}
+body{font-family:'Inter',sans-serif;background:#080a14;background-image:radial-gradient(ellipse 80% 40% at 50% -10%,rgba(99,120,200,.2) 0%,transparent 70%),radial-gradient(ellipse 60% 30% at 50% 110%,rgba(180,140,60,.1) 0%,transparent 70%);color:#e8e2d8;font-size:15px}
+button,input{font:inherit;cursor:pointer}
+svg,canvas{display:block}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:.85rem 1.5rem;border-bottom:1px solid rgba(193,203,255,.08);background:rgba(8,10,20,.75);backdrop-filter:blur(22px);position:sticky;top:0;z-index:30}
+.brand{display:flex;align-items:center;gap:.85rem}
+.brand-icon{width:2.5rem;height:2.5rem;border-radius:.7rem;display:grid;place-items:center;background:linear-gradient(145deg,rgba(209,181,116,.18),rgba(14,18,34,.9));border:1px solid rgba(209,181,116,.22);color:#d1b574;box-shadow:0 0 18px rgba(209,181,116,.1)}
+.brand-icon svg{width:1.35rem;height:1.35rem}
+.brand-text small{display:block;text-transform:uppercase;letter-spacing:.12em;font-size:.6rem;color:rgba(187,183,201,.4);margin-bottom:.1rem}
+.brand-text strong{font-family:'Cinzel',serif;font-size:1.08rem;font-weight:700;letter-spacing:.02em;color:#f0e9df}
+.btn-roll-top{padding:.52rem 1.35rem;background:linear-gradient(135deg,rgba(123,145,201,.88),rgba(80,104,172,.88));color:#fff;border:1px solid rgba(123,145,201,.3);border-radius:.75rem;font-weight:600;font-size:.88rem;box-shadow:0 0 22px rgba(100,120,200,.22);transition:transform 140ms,box-shadow 140ms}
+.btn-roll-top:hover{transform:translateY(-1px);box-shadow:0 4px 22px rgba(100,120,200,.38)}
+.layout{display:grid;grid-template-columns:276px 1fr;min-height:calc(100vh - 55px)}
+.sidebar{border-right:1px solid rgba(193,203,255,.07);padding:1.15rem .95rem;display:flex;flex-direction:column;gap:.85rem;background:rgba(10,12,22,.52)}
+.panel{background:rgba(18,22,40,.58);border:1px solid rgba(193,203,255,.09);border-radius:1.05rem;padding:.95rem}
+.panel h2{font-family:'Cinzel',serif;font-size:.9rem;font-weight:700;color:#e8e2d8;margin:0 0 .8rem;letter-spacing:.02em}
+.dice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.42rem}
+.dice-btn{padding:.62rem .35rem;background:rgba(255,255,255,.04);border:1px solid rgba(193,203,255,.1);border-radius:.6rem;color:#c8c0b0;font-weight:700;font-size:.92rem;transition:all 140ms}
+.dice-btn:hover{background:rgba(209,181,116,.1);border-color:rgba(209,181,116,.3);color:#d1b574;transform:translateY(-1px)}
+.dice-btn.active{background:rgba(209,181,116,.13);border-color:rgba(209,181,116,.52);color:#d1b574;box-shadow:0 0 14px rgba(209,181,116,.14)}
+.notation-field{display:flex;flex-direction:column;gap:.48rem}
+.notation-field label{font-size:.75rem;color:rgba(187,183,201,.48)}
+.notation-field input{padding:.55rem .82rem;background:rgba(255,255,255,.05);border:1px solid rgba(193,203,255,.12);border-radius:.6rem;color:#e8e2d8;transition:border-color 140ms}
+.notation-field input:focus{outline:none;border-color:rgba(123,145,201,.45);background:rgba(123,145,201,.06)}
+.btn-exec{padding:.58rem;border-radius:.6rem;background:rgba(123,145,201,.14);border:1px solid rgba(123,145,201,.2);color:#aab8e0;font-weight:600;font-size:.8rem;transition:all 140ms}
+.btn-exec:hover{background:rgba(123,145,201,.24);color:#c0ccec}
+.result-panel{background:linear-gradient(160deg,rgba(209,181,116,.06),rgba(100,120,200,.08));border:1px solid rgba(209,181,116,.12);border-radius:1.05rem;padding:.95rem}
+.result-panel h2{font-family:'Cinzel',serif;font-size:.9rem;color:#e8e2d8;margin:0 0 .7rem}
+.result-rolls{font-family:'Cinzel',serif;font-size:1.75rem;font-weight:700;color:#d1b574;line-height:1.1;min-height:2.2rem;letter-spacing:.04em;word-break:break-all}
+.result-total{margin-top:.38rem;font-size:.83rem;color:rgba(187,183,201,.58);font-family:'EB Garamond',serif}
+.stage{display:flex;flex-direction:column}
+.canvas-wrap{flex:1;position:relative;background:radial-gradient(ellipse 70% 50% at 50% 30%,rgba(100,120,200,.09),transparent 70%),linear-gradient(180deg,#0c0e1e 0%,#080a14 100%);min-height:calc(100vh - 55px);overflow:hidden}
+#dice-canvas{width:100%;height:100%;position:absolute;inset:0;display:block}
+.canvas-floor{position:absolute;bottom:0;left:0;right:0;height:200px;background:linear-gradient(to top,rgba(8,10,20,.92),transparent);pointer-events:none}
+.status-pill{position:absolute;bottom:1.2rem;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:.48rem;padding:.42rem .95rem;background:rgba(8,10,20,.82);border:1px solid rgba(193,203,255,.1);border-radius:999px;backdrop-filter:blur(14px);font-size:.76rem;color:rgba(187,183,201,.68);white-space:nowrap;pointer-events:none}
+.sdot{width:.48rem;height:.48rem;border-radius:50%;background:#8fdf88;box-shadow:0 0 0 4px rgba(143,223,136,.12);flex-shrink:0;transition:background .3s}
+.sdot.rolling{background:#d1b574;box-shadow:0 0 0 4px rgba(209,181,116,.18)}
+@media(max-width:860px){.layout{grid-template-columns:1fr}.sidebar{border-right:none;border-bottom:1px solid rgba(193,203,255,.07)}.canvas-wrap{min-height:60vw}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-icon">
+      <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="2.2">
+        <polygon points="20,4 36,13 36,27 20,36 4,27 4,13" stroke-linejoin="round"/>
+        <line x1="20" y1="4" x2="20" y2="36"/>
+        <line x1="4" y1="13" x2="36" y2="13"/>
+        <line x1="4" y1="27" x2="36" y2="27"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <small>Biblioteca Arcana</small>
+      <strong>Dados 3D RPG</strong>
+    </div>
+  </div>
+  <button class="btn-roll-top" id="btn-top-roll">Rolar d20</button>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="panel">
+      <h2>Tipo de dado</h2>
+      <div class="dice-grid">
+        <button class="dice-btn" data-dice="d4">d4</button>
+        <button class="dice-btn" data-dice="d6">d6</button>
+        <button class="dice-btn" data-dice="d8">d8</button>
+        <button class="dice-btn" data-dice="d10">d10</button>
+        <button class="dice-btn" data-dice="d12">d12</button>
+        <button class="dice-btn" data-dice="d20">d20</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Expressão</h2>
+      <div class="notation-field">
+        <label for="notation-input">Ex: 2d6+3 · 1d20 · 4d8-2</label>
+        <input id="notation-input" type="text" value="1d20" spellcheck="false"/>
+        <button class="btn-exec" id="btn-exec">Executar expressão</button>
+      </div>
+    </div>
+    <div class="result-panel">
+      <h2>Resultado</h2>
+      <div class="result-rolls" id="roll-display">—</div>
+      <div class="result-total" id="roll-total">Nenhuma rolagem ainda</div>
+    </div>
+  </aside>
+  <div class="stage">
+    <div class="canvas-wrap">
+      <canvas id="dice-canvas"></canvas>
+      <div class="canvas-floor"></div>
+      <div class="status-pill">
+        <span class="sdot" id="sdot"></span>
+        <span id="status-msg">Inicializando…</span>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+'use strict';
+var notInput=document.getElementById('notation-input');
+var rollDisp=document.getElementById('roll-display');
+var rollTotal=document.getElementById('roll-total');
+var diceBtns=document.querySelectorAll('.dice-btn');
+var btnTopRoll=document.getElementById('btn-top-roll');
+var btnExec=document.getElementById('btn-exec');
+var statusMsg=document.getElementById('status-msg');
+var sdot=document.getElementById('sdot');
+var canvas=document.getElementById('dice-canvas');
+var S={sel:'d20',renderer:null,scene:null,camera:null,dice:[],world:null,rolling:false};
+var texCache={};
+
+function setStatus(msg,state){statusMsg.textContent=msg;sdot.className='sdot'+(state==='rolling'?' rolling':'');}
+
+function makeNumberTexture(num,sides){
+  var key=sides+'_'+num;
+  if(texCache[key])return texCache[key];
+  var sz=256,c=document.createElement('canvas');
+  c.width=c.height=sz;
+  var ctx=c.getContext('2d');
+  var grad=ctx.createRadialGradient(sz/2,sz/2,sz*0.05,sz/2,sz/2,sz*0.65);
+  grad.addColorStop(0,'#252010');grad.addColorStop(1,'#141008');
+  ctx.fillStyle=grad;ctx.fillRect(0,0,sz,sz);
+  ctx.strokeStyle='rgba(209,181,116,.6)';ctx.lineWidth=10;
+  ctx.strokeRect(6,6,sz-12,sz-12);
+  var inner=ctx.createLinearGradient(0,0,sz,sz);
+  inner.addColorStop(0,'rgba(209,181,116,.06)');inner.addColorStop(1,'rgba(80,104,172,.06)');
+  ctx.fillStyle=inner;ctx.fillRect(0,0,sz,sz);
+  var pct=num/sides;
+  var r=Math.round(220-pct*60),g=Math.round(200-pct*80),b=Math.round(120+pct*120);
+  ctx.fillStyle='rgb('+r+','+g+','+b+')';
+  ctx.shadowColor='rgba(0,0,0,.9)';ctx.shadowBlur=14;
+  var fs=sides<=6?136:sides<=8?122:108;
+  ctx.font='bold '+fs+'px Georgia,serif';
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(String(num),sz/2,sz/2+6);
+  ctx.shadowBlur=0;
+  if(num===sides){
+    ctx.strokeStyle='rgba(209,181,116,.5)';ctx.lineWidth=3;
+    ctx.beginPath();ctx.arc(sz/2,sz-18,6,0,Math.PI*2);ctx.stroke();
+  }
+  var tex=new THREE.CanvasTexture(c);
+  texCache[key]=tex;
+  return tex;
+}
+
+function geomFor(sides){
+  if(sides===4)return new THREE.TetrahedronGeometry(1.05,0);
+  if(sides===6)return new THREE.BoxGeometry(1.3,1.3,1.3);
+  if(sides===8)return new THREE.OctahedronGeometry(1.05,0);
+  if(sides===10)return new THREE.CylinderGeometry(0.75,0.75,1.25,10);
+  if(sides===12)return new THREE.DodecahedronGeometry(0.96,0);
+  return new THREE.IcosahedronGeometry(1.05,0);
+}
+
+function makeD6Materials(){
+  return [1,2,3,4,5,6].map(function(n){
+    return new THREE.MeshStandardMaterial({map:makeNumberTexture(n,6),roughness:0.28,metalness:0.2,emissive:new THREE.Color(0x080c18),emissiveIntensity:0.4});
+  });
+}
+
+function makeMaterials(sides){
+  var fc={4:4,8:8,10:20,12:12,20:20};
+  var count=fc[sides]||sides;
+  var mats=[];
+  for(var i=1;i<=count;i++){
+    mats.push(new THREE.MeshStandardMaterial({map:makeNumberTexture(i,sides),roughness:0.28,metalness:0.2,emissive:new THREE.Color(0x080c18),emissiveIntensity:0.4}));
+  }
+  return mats;
+}
+
+function parseNotation(raw){
+  var m=raw.trim().toLowerCase().match(/^(\d*)d(\d+)([+-]\d+)?$/);
+  if(!m)return null;
+  return{count:+(m[1]||1),sides:+m[2],mod:+(m[3]||0)};
+}
+function rollDie(s){return Math.floor(Math.random()*s)+1;}
+
+function runNotation(expr){
+  var p=parseNotation(expr);
+  if(!p){setStatus('Formato invalido — ex: 2d6+3');return;}
+  var rolls=[],i;
+  for(i=0;i<p.count;i++)rolls.push(rollDie(p.sides));
+  var total=rolls.reduce(function(a,b){return a+b;},0)+p.mod;
+  rollDisp.textContent=rolls.join(' + ');
+  rollTotal.textContent='Total: '+total+(p.mod?(p.mod>0?' (+'+p.mod+')':' ('+p.mod+')'):'');
+  throwDice(rolls,p.sides);
+}
+
+function selectDie(die){
+  S.sel=die;
+  btnTopRoll.textContent='Rolar '+die;
+  diceBtns.forEach(function(b){b.classList.toggle('active',b.dataset.dice===die);});
+}
+
+function buildWorld(){
+  S.world=new CANNON.World();
+  S.world.gravity.set(0,-28,0);
+  S.world.allowSleep=true;
+  S.world.solver.iterations=20;
+  var fl=new CANNON.Body({mass:0});
+  fl.addShape(new CANNON.Plane());
+  fl.quaternion.setFromEuler(-Math.PI/2,0,0);
+  fl.position.set(0,-1.2,0);
+  S.world.addBody(fl);
+  [[0,-6,0],[0,6,0],[-6,0,Math.PI/2],[6,0,Math.PI/2]].forEach(function(w){
+    var b=new CANNON.Body({mass:0});
+    b.addShape(new CANNON.Box(new CANNON.Vec3(10,5,0.2)));
+    b.position.set(w[0],1,w[1]);
+    b.quaternion.setFromEuler(0,w[2],0);
+    S.world.addBody(b);
+  });
+}
+
+function clearDice(){
+  S.dice.forEach(function(d){
+    S.scene.remove(d.mesh);S.world.remove(d.body);
+    if(Array.isArray(d.mesh.material))d.mesh.material.forEach(function(m){m.dispose();});
+    else d.mesh.material.dispose();
+    d.mesh.geometry.dispose();
+  });
+  S.dice=[];
+}
+
+function spawnDice(rolls,sides){
+  clearDice();
+  var count=rolls.length;
+  var spread=Math.max(1.2,Math.min(4.0,count*1.0));
+  for(var i=0;i<count;i++){
+    var geom=geomFor(sides);
+    var mats=sides===6?makeD6Materials():makeMaterials(sides);
+    var mesh=new THREE.Mesh(geom,mats);
+    mesh.castShadow=true;
+    var shape=sides===6?new CANNON.Box(new CANNON.Vec3(0.65,0.65,0.65)):new CANNON.Sphere(0.75);
+    var body=new CANNON.Body({mass:1,linearDamping:0.18,angularDamping:0.22});
+    body.allowSleep=true;body.sleepSpeedLimit=0.15;body.sleepTimeLimit=1.0;
+    body.addShape(shape);
+    body.position.set((Math.random()-0.5)*spread,6+i*1.0,(Math.random()-0.5)*spread);
+    body.quaternion.setFromEuler(Math.random()*Math.PI*2,Math.random()*Math.PI*2,Math.random()*Math.PI*2);
+    mesh.position.copy(body.position);mesh.quaternion.copy(body.quaternion);
+    S.scene.add(mesh);S.world.addBody(body);
+    S.dice.push({mesh:mesh,body:body,sides:sides,roll:rolls[i]});
+  }
+}
+
+function throwDice(rolls,sides){
+  S.rolling=true;setStatus('Rolando...','rolling');
+  spawnDice(rolls,sides);
+  S.dice.forEach(function(d){
+    var f=7+Math.random()*7;
+    d.body.wakeUp();
+    d.body.applyImpulse(new CANNON.Vec3((Math.random()-0.5)*f,f*0.85,(Math.random()-0.5)*f),d.body.position);
+    d.body.angularVelocity.set((Math.random()-0.5)*30,(Math.random()-0.5)*30,(Math.random()-0.5)*30);
+  });
+}
+
+function initScene(){
+  var wrap=canvas.parentElement;
+  var W=wrap.clientWidth||window.innerWidth-280;
+  var H=wrap.clientHeight||window.innerHeight-55;
+  var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.setSize(W,H);
+  renderer.shadowMap.enabled=true;
+  renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  var scene=new THREE.Scene();
+  scene.background=new THREE.Color(0x090b18);
+  scene.fog=new THREE.FogExp2(0x090b18,0.048);
+  var camera=new THREE.PerspectiveCamera(44,W/H,0.1,120);
+  camera.position.set(0,9,12);camera.lookAt(0,-0.5,0);
+  scene.add(new THREE.AmbientLight(0x8090c8,1.2));
+  var key=new THREE.DirectionalLight(0xffffff,3.5);
+  key.position.set(5,14,7);key.castShadow=true;
+  key.shadow.mapSize.width=key.shadow.mapSize.height=1024;
+  key.shadow.camera.near=0.1;key.shadow.camera.far=40;
+  key.shadow.camera.left=key.shadow.camera.bottom=-10;
+  key.shadow.camera.right=key.shadow.camera.top=10;
+  scene.add(key);
+  var fill=new THREE.DirectionalLight(0x6677cc,1.5);fill.position.set(-6,5,-4);scene.add(fill);
+  var warm=new THREE.PointLight(0xd4a040,40,30,2);warm.position.set(-3,6,3);scene.add(warm);
+  var floor=new THREE.Mesh(new THREE.CircleGeometry(6.5,96),new THREE.MeshStandardMaterial({color:0x0e1122,roughness:1.0,metalness:0.05}));
+  floor.rotation.x=-Math.PI/2;floor.position.y=-1.2;floor.receiveShadow=true;scene.add(floor);
+  var ring=new THREE.Mesh(new THREE.RingGeometry(2.6,2.68,80),new THREE.MeshBasicMaterial({color:0x3a4a90,side:THREE.DoubleSide,transparent:true,opacity:0.4}));
+  ring.rotation.x=-Math.PI/2;ring.position.y=-1.18;scene.add(ring);
+  S.renderer=renderer;S.scene=scene;S.camera=camera;
+  buildWorld();
+  setStatus('Pronto — clique em um dado para rolar');
+  animate();
+}
+
+var lastT=null;
+function animate(t){
+  requestAnimationFrame(animate);
+  var dt=1/60;
+  if(lastT!==null)dt=Math.min((t-lastT)/1000,0.05);
+  lastT=t;
+  if(S.world)S.world.step(1/60,dt,3);
+  S.dice.forEach(function(d){d.mesh.position.copy(d.body.position);d.mesh.quaternion.copy(d.body.quaternion);});
+  if(S.rolling&&S.dice.length>0){
+    var done=S.dice.every(function(d){return d.body.sleepState===CANNON.Body.SLEEPING;});
+    if(done){S.rolling=false;setStatus('Dado parou — veja o resultado');}
+  }
+  if(S.renderer)S.renderer.render(S.scene,S.camera);
+}
+
+window.addEventListener('resize',function(){
+  if(!S.renderer||!S.camera)return;
+  var wrap=canvas.parentElement,W=wrap.clientWidth,H=wrap.clientHeight;
+  if(!W||!H)return;
+  S.renderer.setSize(W,H);S.camera.aspect=W/H;S.camera.updateProjectionMatrix();
+});
+
+diceBtns.forEach(function(btn){
+  btn.addEventListener('click',function(){
+    selectDie(btn.dataset.dice);notInput.value='1'+btn.dataset.dice;runNotation('1'+btn.dataset.dice);
+  });
+});
+btnTopRoll.addEventListener('click',function(){runNotation('1'+S.sel);});
+btnExec.addEventListener('click',function(){runNotation(notInput.value);});
+notInput.addEventListener('keydown',function(e){if(e.key==='Enter')runNotation(notInput.value);});
+
+selectDie('d20');
+
+if(typeof THREE!=='undefined'&&typeof CANNON!=='undefined'){
+  initScene();
+}else{
+  setStatus('Erro: abra com internet ativa para carregar Three.js + cannon.js');
+}
+})();
+</script>
+</body>
+</html>
