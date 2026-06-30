@@ -26,14 +26,15 @@ var UP         = new THREE.Vector3(0,1,0);
 var CAM_HOME      = new THREE.Vector3(0,7,10);
 var CAM_LOOK_HOME = new THREE.Vector3(0,-0.5,0);
 var FLOOR_Y    = -1.1;
-var MIN_ROLL_MS = 7000;
+var MIN_ROLL_MS = 4500;   // tempo mínimo antes de checar parada
+var MAX_ROLL_MS = 14000;  // hard cap: força parada mesmo sem sleep
 
 // ─── Estado ────────────────────────────────────────────────────────────────
 var S = {
   pool: {},
   renderer: null, scene: null, camera: null,
   world: null,
-  dice: [],        // [{mesh, body, sides}]
+  dice: [],
   rolling: false,
   rollStartTime: 0,
   camLook: new THREE.Vector3(),
@@ -80,8 +81,7 @@ function makeD10Geometry() {
   var geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); geo.computeVertexNormals(); return geo;
 }
 
-// ─── UV plano por face — CORRIGIDO com toNonIndexed ────────────────────────
-// Converte pra não-indexado primeiro para evitar conflitos de UV em vértices compartilhados
+// ─── UV plano por face ────────────────────────────────────────────────────
 function planarizeFaceUVs(geometry) {
   var pos=geometry.attributes.position, idx=geometry.index;
   var uvArr=new Float32Array(pos.count*2);
@@ -117,7 +117,6 @@ function geomFor(sides) {
 
   var tpf=TRIS[sides];
   if(tpf) {
-    // toNonIndexed garante que cada vértice é exclusivo de uma face → sem conflito de UV
     var ni = (geo.index) ? geo.toNonIndexed() : geo;
     ni.clearGroups();
     for(var f=0;f<sides;f++) ni.addGroup(f*tpf*3,tpf*3,f);
@@ -128,7 +127,7 @@ function geomFor(sides) {
   return geo;
 }
 
-// ─── Normal local de face (para detecção de face no topo) ──────────────────
+// ─── Normal local de face ──────────────────────────────────────────────────
 function faceNormalLocal(geo, group) {
   var pos=geo.attributes.position, idx=geo.index, i0,i1,i2;
   if(idx){i0=idx.getX(group.start);i1=idx.getX(group.start+1);i2=idx.getX(group.start+2);}
@@ -139,7 +138,6 @@ function faceNormalLocal(geo, group) {
   return new THREE.Vector3().subVectors(B,A).cross(new THREE.Vector3().subVectors(C,A)).normalize();
 }
 
-// ─── Detecta qual face está virada pra cima (usa quaternion real do mesh) ──
 function getTopFace(mesh) {
   var geo=mesh.geometry;
   if(!geo.groups||geo.groups.length===0) return 1;
@@ -168,7 +166,7 @@ var crackTex=(function(){
 var envTex=new THREE.TextureLoader().load('src/dice/d20.png');
 envTex.mapping=THREE.SphericalReflectionMapping;
 
-// ─── Textura de face: gradiente ametista + número ───────────────────────────
+// ─── Textura de face ───────────────────────────────────────────────────────
 var faceTexCache={};
 function shade(hex,amt){
   var r=(hex>>16)&255,g=(hex>>8)&255,b=hex&255;
@@ -179,18 +177,15 @@ function faceTex(n,sides){
   var key=sides+'_'+n; if(faceTexCache[key]) return faceTexCache[key];
   var sz=256,c=document.createElement('canvas'); c.width=sz;c.height=sz;
   var ctx=c.getContext('2d'), base=DICE_COLOR[sides]||0xb583e0;
-  // fundo mais escuro para dar contraste ao número
   var grad=ctx.createRadialGradient(sz*.38,sz*.32,sz*.04,sz*.5,sz*.5,sz*.74);
   grad.addColorStop(0,shade(base,0.2));
   grad.addColorStop(1,shade(base,-0.65));
   ctx.fillStyle=grad; ctx.fillRect(0,0,sz,sz);
-  // número: branco puro com glow duplo para ser legível na iluminação escura
   ctx.shadowColor='rgba(255,255,255,0.95)'; ctx.shadowBlur=28;
   ctx.fillStyle='#ffffff';
   var fs=sides<=6?114:sides<=8?100:84;
   ctx.font='bold '+fs+'px Cinzel,serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText(String(n),sz/2,sz/2+4);
-  // segundo passo de glow roxo por baixo
   ctx.shadowColor='rgba(180,140,255,0.7)'; ctx.shadowBlur=18;
   ctx.fillStyle='rgba(255,255,255,0.35)';
   ctx.fillText(String(n),sz/2,sz/2+4);
@@ -202,8 +197,8 @@ function materialsFor(sides){
     map:faceTex(i,sides), color:0xffffff,
     emissive:new THREE.Color(0x2a1540), emissiveIntensity:0.22,
     flatShading:true,
-    shininess:18,                        // muito baixo → sem reflexo forte
-    specular:new THREE.Color(0x150a22),  // quase preto → sem destaque especular
+    shininess:18,
+    specular:new THREE.Color(0x150a22),
     envMap:envTex, combine:THREE.MixOperation, reflectivity:0.06,
     bumpMap:crackTex, bumpScale:0.022,
     transparent:true, opacity:0.97,
@@ -214,40 +209,206 @@ function materialsFor(sides){
 // ─── Easing ─────────────────────────────────────────────────────────────────
 function easeInOutCubic(t){return t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;}
 
-// ─── Textura de veludo escuro (mesa de RPG) ─────────────────────────────────
-function makeTableTexture(){
-  var sz=1024,c=document.createElement('canvas'); c.width=sz;c.height=sz;
+// ─── Textura de madeira escura RPG ──────────────────────────────────────────
+function makeWoodTexture(repeatU, repeatV) {
+  var sz=1024, c=document.createElement('canvas'); c.width=sz; c.height=sz;
   var ctx=c.getContext('2d');
-  // Base: veludo roxo profundo
-  var bg=ctx.createRadialGradient(sz*.46,sz*.42,sz*.04,sz/2,sz/2,sz*.75);
-  bg.addColorStop(0,'#1c1548'); bg.addColorStop(0.55,'#100e30'); bg.addColorStop(1,'#07051a');
+
+  // Base: marrom mogno escuro
+  var bg=ctx.createLinearGradient(0,0,sz,sz);
+  bg.addColorStop(0,'#2c1a0e');
+  bg.addColorStop(0.3,'#3d2310');
+  bg.addColorStop(0.6,'#2a1608');
+  bg.addColorStop(1,'#1e1006');
   ctx.fillStyle=bg; ctx.fillRect(0,0,sz,sz);
-  // Fibras do tecido (tiny strokes)
-  for(var i=0;i<7000;i++){
-    var x=Math.random()*sz, y=Math.random()*sz;
-    var angle=Math.random()*Math.PI, len=1+Math.random()*2.5;
-    var alpha=0.012+Math.random()*0.04;
-    ctx.strokeStyle='rgba(120,95,200,'+alpha+')';
-    ctx.lineWidth=0.6; ctx.beginPath(); ctx.moveTo(x,y);
-    ctx.lineTo(x+Math.cos(angle)*len,y+Math.sin(angle)*len); ctx.stroke();
+
+  // Veios de madeira — linhas onduladas horizontais
+  for(var i=0;i<60;i++){
+    var y0=Math.random()*sz;
+    var alpha=0.03+Math.random()*0.09;
+    var lighter=Math.random()<0.5;
+    ctx.strokeStyle=lighter?'rgba(180,110,50,'+alpha+')':'rgba(10,4,0,'+alpha+')';
+    ctx.lineWidth=0.5+Math.random()*2.5;
+    ctx.beginPath();
+    ctx.moveTo(0,y0);
+    for(var x=0;x<sz;x+=18){
+      y0+=( Math.random()-0.5)*8;
+      ctx.lineTo(x,y0);
+    }
+    ctx.stroke();
   }
-  // Padrão losangos sutis (tecido diamante)
-  ctx.strokeStyle='rgba(90,70,160,0.055)'; ctx.lineWidth=0.8;
-  var sp=32;
-  for(var d=-sz;d<sz*2;d+=sp){
-    ctx.beginPath();ctx.moveTo(d,0);ctx.lineTo(d+sz,sz);ctx.stroke();
-    ctx.beginPath();ctx.moveTo(d,0);ctx.lineTo(d-sz,sz);ctx.stroke();
+
+  // Nós de madeira (2-4 nós)
+  var knots=2+Math.floor(Math.random()*3);
+  for(var k=0;k<knots;k++){
+    var kx=sz*0.15+Math.random()*sz*0.7;
+    var ky=sz*0.15+Math.random()*sz*0.7;
+    for(var r=28;r>0;r-=2){
+      var a2=0.015+Math.random()*0.04;
+      ctx.strokeStyle='rgba(15,6,0,'+a2+')';
+      ctx.lineWidth=1.2;
+      ctx.beginPath();
+      ctx.ellipse(kx,ky,r,r*0.6,Math.random()*Math.PI,0,Math.PI*2);
+      ctx.stroke();
+    }
   }
-  // Reflexo central suave (luz de cima)
-  var glow=ctx.createRadialGradient(sz/2,sz/2,0,sz/2,sz/2,sz*.42);
-  glow.addColorStop(0,'rgba(180,160,255,0.06)');glow.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=glow;ctx.fillRect(0,0,sz,sz);
-  // Vinheta
-  var vig=ctx.createRadialGradient(sz/2,sz/2,sz*.12,sz/2,sz/2,sz*.82);
-  vig.addColorStop(0,'rgba(0,0,0,0)');vig.addColorStop(1,'rgba(0,0,0,0.72)');
-  ctx.fillStyle=vig;ctx.fillRect(0,0,sz,sz);
+
+  // Camada de verniz — reflexo sutil
+  var gloss=ctx.createLinearGradient(0,0,sz,sz*0.6);
+  gloss.addColorStop(0,'rgba(255,200,130,0.07)');
+  gloss.addColorStop(0.4,'rgba(255,200,130,0.02)');
+  gloss.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=gloss; ctx.fillRect(0,0,sz,sz);
+
+  // Vinheta nas bordas
+  var vig=ctx.createRadialGradient(sz/2,sz/2,sz*0.25,sz/2,sz/2,sz*0.85);
+  vig.addColorStop(0,'rgba(0,0,0,0)');
+  vig.addColorStop(1,'rgba(0,0,0,0.55)');
+  ctx.fillStyle=vig; ctx.fillRect(0,0,sz,sz);
+
   var t=new THREE.CanvasTexture(c);
-  t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(2,2);return t;
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  t.repeat.set(repeatU||2, repeatV||2);
+  return t;
+}
+
+// Textura de feltro verde escuro (superfície de jogo)
+function makeFeltTexture(){
+  var sz=512, c=document.createElement('canvas'); c.width=sz; c.height=sz;
+  var ctx=c.getContext('2d');
+  ctx.fillStyle='#1a3320'; ctx.fillRect(0,0,sz,sz);
+  // Fibras do feltro
+  for(var i=0;i<12000;i++){
+    var x=Math.random()*sz, y=Math.random()*sz;
+    var angle=Math.random()*Math.PI, len=1+Math.random()*2;
+    var alpha=0.02+Math.random()*0.06;
+    ctx.strokeStyle='rgba(80,160,80,'+alpha+')';
+    ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(x,y);
+    ctx.lineTo(x+Math.cos(angle)*len, y+Math.sin(angle)*len);
+    ctx.stroke();
+  }
+  // Leve reflexo central
+  var glow=ctx.createRadialGradient(sz/2,sz/2,0,sz/2,sz/2,sz*.5);
+  glow.addColorStop(0,'rgba(100,200,100,0.05)');
+  glow.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=glow; ctx.fillRect(0,0,sz,sz);
+  var t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(3,3);
+  return t;
+}
+
+// ─── Construir mesa 3D ───────────────────────────────────────────────────────
+function buildTable(scene) {
+  var woodTex   = makeWoodTexture(2,2);
+  var woodTexLeg= makeWoodTexture(1,4);
+  var feltTex   = makeFeltTexture();
+
+  var woodMat = new THREE.MeshPhongMaterial({
+    map: woodTex, color:0xffffff,
+    shininess:55, specular:new THREE.Color(0x3a1e08),
+  });
+  var woodMatLeg = new THREE.MeshPhongMaterial({
+    map: woodTexLeg, color:0xffffff,
+    shininess:45, specular:new THREE.Color(0x2a1206),
+  });
+  var feltMat = new THREE.MeshPhongMaterial({
+    map: feltTex, color:0xffffff,
+    shininess:4, specular:new THREE.Color(0x0a1a0a),
+  });
+
+  var TABLE_Y  = FLOOR_Y;        // topo do tampo = nível do chão físico
+  var SLAB_H   = 0.22;           // espessura do tampo
+  var RADIUS   = 5.6;            // raio do tampo (circular)
+  var LEG_H    = 2.8;            // altura das pernas
+  var LEG_R    = 0.18;           // raio das pernas (cilindricas torneadas)
+  var LEG_DIST = 3.8;            // distância do centro
+
+  // ── Tampo: cilindro achatado ────────────────────────────────────────────
+  var slabGeo = new THREE.CylinderGeometry(RADIUS, RADIUS, SLAB_H, 80);
+  var slab    = new THREE.Mesh(slabGeo, woodMat);
+  slab.position.set(0, TABLE_Y - SLAB_H/2, 0);
+  scene.add(slab);
+
+  // ── Superfície de feltro (fica sobre o tampo) ───────────────────────────
+  var feltGeo = new THREE.CylinderGeometry(RADIUS-0.12, RADIUS-0.12, 0.012, 80);
+  var felt    = new THREE.Mesh(feltGeo, feltMat);
+  felt.position.set(0, TABLE_Y + 0.006, 0);
+  scene.add(felt);
+
+  // ── Moldura / borda entalhada ────────────────────────────────────────────
+  // Anel externo levemente mais alto que o tampo → cria bordas de proteção
+  var rimGeo = new THREE.CylinderGeometry(RADIUS+0.05, RADIUS+0.14, SLAB_H+0.18, 80, 1, true);
+  var rim    = new THREE.Mesh(rimGeo, woodMat);
+  rim.position.set(0, TABLE_Y - SLAB_H/2 + 0.04, 0);
+  scene.add(rim);
+
+  // Chanfro inferior da borda (toro achatado simulado com cylinder menor)
+  var chamferGeo = new THREE.TorusGeometry(RADIUS+0.05, 0.07, 8, 80);
+  var chamfer    = new THREE.Mesh(chamferGeo, woodMat);
+  chamfer.rotation.x = -Math.PI/2;
+  chamfer.position.set(0, TABLE_Y - SLAB_H, 0);
+  scene.add(chamfer);
+
+  // ── 4 Pernas torneadas ──────────────────────────────────────────────────
+  var legPositions = [
+    [ LEG_DIST,  LEG_DIST],
+    [-LEG_DIST,  LEG_DIST],
+    [ LEG_DIST, -LEG_DIST],
+    [-LEG_DIST, -LEG_DIST],
+  ];
+
+  // Perna torneada: série de cilindros com variação de raio (efeito torno)
+  function buildLeg(px, pz) {
+    var group = new THREE.Group();
+    // Segmentos torneados (base mais grossa, meio mais fino, topo)
+    var segs = [
+      {r:LEG_R*1.5, h:0.18, y:0},           // base (pé)
+      {r:LEG_R*1.1, h:0.35, y:0.18},        // tornozelo
+      {r:LEG_R*0.8, h:LEG_H*0.5, y:0.53},  // fuste fino
+      {r:LEG_R*1.05,h:0.2,  y:0.53+LEG_H*0.5}, // friso do meio
+      {r:LEG_R*0.85,h:LEG_H*0.35,y:0.73+LEG_H*0.5}, // fuste superior
+      {r:LEG_R*1.3, h:0.22, y:0.73+LEG_H*0.85}, // capitel
+    ];
+    segs.forEach(function(s){
+      var g=new THREE.CylinderGeometry(s.r, s.r, s.h, 16);
+      var m=new THREE.Mesh(g, woodMatLeg);
+      m.position.y = s.y + s.h/2;
+      group.add(m);
+    });
+    group.position.set(px, TABLE_Y - SLAB_H - LEG_H, pz);
+    scene.add(group);
+  }
+
+  legPositions.forEach(function(lp){ buildLeg(lp[0], lp[1]); });
+
+  // ── Travessas (stretcher) entre pernas — estabilidade visual ────────────
+  function buildStretcher(x1,z1,x2,z2){
+    var dx=x2-x1, dz=z2-z1;
+    var len=Math.sqrt(dx*dx+dz*dz);
+    var angle=Math.atan2(dz,dx);
+    var geo=new THREE.CylinderGeometry(LEG_R*0.55, LEG_R*0.55, len, 10);
+    var mesh=new THREE.Mesh(geo, woodMatLeg);
+    // rotaciona para deitado no plano XZ
+    mesh.rotation.z=Math.PI/2;
+    mesh.rotation.y=-angle;
+    var midY = TABLE_Y - SLAB_H - LEG_H*0.38;
+    mesh.position.set((x1+x2)/2, midY, (z1+z2)/2);
+    scene.add(mesh);
+  }
+
+  buildStretcher( LEG_DIST,  LEG_DIST, -LEG_DIST,  LEG_DIST);
+  buildStretcher(-LEG_DIST, -LEG_DIST,  LEG_DIST, -LEG_DIST);
+  buildStretcher( LEG_DIST,  LEG_DIST,  LEG_DIST, -LEG_DIST);
+  buildStretcher(-LEG_DIST,  LEG_DIST, -LEG_DIST, -LEG_DIST);
+
+  // ── Anéis mágicos (mantidos, agora sobre o feltro) ──────────────────────
+  var ring=new THREE.Mesh(new THREE.RingGeometry(2.6,2.7,72),
+    new THREE.MeshBasicMaterial({color:0x4fd6c4,side:THREE.DoubleSide,transparent:true,opacity:0.35}));
+  ring.rotation.x=-Math.PI/2; ring.position.y=TABLE_Y+0.02; scene.add(ring);
+  var ring2=new THREE.Mesh(new THREE.RingGeometry(4.2,4.28,72),
+    new THREE.MeshBasicMaterial({color:0x9b63cf,side:THREE.DoubleSide,transparent:true,opacity:0.18}));
+  ring2.rotation.x=-Math.PI/2; ring2.position.y=TABLE_Y+0.02; scene.add(ring2);
 }
 
 // ─── Física: mundo cannon.js ────────────────────────────────────────────────
@@ -258,12 +419,12 @@ function initPhysics(){
   world.solver.iterations=20;
   world.allowSleep=true;
 
-  // Material de contato (dados vs chão): ricocheteia um pouco
   var diceMat  =new CANNON.Material('dice');
   var floorMat =new CANNON.Material('floor');
-  var contact  =new CANNON.ContactMaterial(diceMat,floorMat,{friction:0.65,restitution:0.22});
+  // Feltro: alta fricção, pouco ricochete
+  var contact  =new CANNON.ContactMaterial(diceMat,floorMat,{friction:0.82,restitution:0.14});
   world.addContactMaterial(contact);
-  var diceDice =new CANNON.ContactMaterial(diceMat,diceMat,{friction:0.5,restitution:0.15});
+  var diceDice =new CANNON.ContactMaterial(diceMat,diceMat,{friction:0.6,restitution:0.12});
   world.addContactMaterial(diceDice);
   S.diceMat=diceMat; S.floorMat=floorMat;
 
@@ -274,7 +435,7 @@ function initPhysics(){
   floor.position.set(0,FLOOR_Y,0);
   world.addBody(floor);
 
-  // Paredes invisíveis pra manter dados na mesa
+  // Paredes invisíveis
   function addWall(x,z,ry){
     var b=new CANNON.Body({mass:0});
     b.addShape(new CANNON.Box(new CANNON.Vec3(6,4,0.18)));
@@ -318,7 +479,7 @@ function nextReveal(){
   S.camToLook=focus.clone().add(new THREE.Vector3(0,0.2,0));
 }
 
-// ─── Revelar resultados após dados pararem ────────────────────────────────────
+// ─── Revelar resultados ────────────────────────────────────────────────────
 function revealResults(){
   if(S.suspenseTimer){clearInterval(S.suspenseTimer);S.suspenseTimer=null;}
   var byType={}, total=0;
@@ -329,14 +490,13 @@ function revealResults(){
     total+=face;
   });
 
-  // Atualiza card da sidebar
   diceResultsGrid.innerHTML='';
   Object.keys(byType).sort(function(a,b){return a-b;}).forEach(function(s){
     byType[s].forEach(function(val){
       var item=document.createElement('div');
       item.className='result-die-item';
-      item.innerHTML='<img class="result-die-icon" src="src/dice/d'+s+'.png" alt=""/>' +
-        '<span class="result-die-label">d'+s+'</span>' +
+      item.innerHTML='<img class="result-die-icon" src="src/dice/d'+s+'.png" alt=""/>'+
+        '<span class="result-die-label">d'+s+'</span>'+
         '<span class="result-die-value">'+val+'</span>';
       diceResultsGrid.appendChild(item);
     });
@@ -344,7 +504,6 @@ function revealResults(){
   resultTotalVal.textContent=total;
   resultTotalRow.style.display='flex';
 
-  // Texto de subtítulo do overlay
   var parts=[];
   Object.keys(byType).sort(function(a,b){return a-b;}).forEach(function(s){
     parts.push(byType[s].length+'×d'+s+': '+byType[s].join(', '));
@@ -355,7 +514,7 @@ function revealResults(){
   startRevealSequence();
 }
 
-// ─── Overlay de revelação mágica ─────────────────────────────────────────────
+// ─── Overlay mágico ──────────────────────────────────────────────────────────
 function showMagicReveal(total, subtitle){
   var overlay=document.getElementById('reveal-overlay');
   var numEl=document.getElementById('reveal-number');
@@ -363,7 +522,6 @@ function showMagicReveal(total, subtitle){
   var sparklesEl=document.getElementById('reveal-sparkles');
   numEl.textContent=total;
   subEl.textContent=subtitle;
-  // Recria sparkles
   sparklesEl.innerHTML='';
   for(var i=0;i<20;i++){
     var dot=document.createElement('div');
@@ -385,6 +543,17 @@ function showMagicReveal(total, subtitle){
   },3200);
 }
 
+// ─── Verificar se dado parou (velocidade real, não só sleep) ────────────────
+function isDiceStopped(body) {
+  // Considera parado se: dormindo OU velocidade angular muito baixa E linear baixa
+  if(body.sleepState === 2) return true; // CANNON.Body.SLEEPING
+  var av = body.angularVelocity;
+  var lv = body.velocity;
+  var angSpeed = Math.sqrt(av.x*av.x + av.y*av.y + av.z*av.z);
+  var linSpeed = Math.sqrt(lv.x*lv.x + lv.y*lv.y + lv.z*lv.z);
+  return angSpeed < 0.4 && linSpeed < 0.3;
+}
+
 // ─── Lançar dados ────────────────────────────────────────────────────────────
 function rollPool(){
   if(!S.scene||!S.world) return;
@@ -393,10 +562,8 @@ function rollPool(){
   if(S.suspenseTimer){clearInterval(S.suspenseTimer);S.suspenseTimer=null;}
   clearDice();
 
-  // reset câmera
   S.camPhase='idle'; S.camera.position.copy(CAM_HOME); S.camLook.copy(CAM_LOOK_HOME);
 
-  // monta lista e embaralha
   var diceList=[];
   keys.forEach(function(s){for(var i=0;i<S.pool[s];i++) diceList.push(+s);});
   diceList.sort(function(){return Math.random()-.5;});
@@ -411,21 +578,20 @@ function rollPool(){
     var geo=geomFor(sides);
     var mesh=new THREE.Mesh(geo,materialsFor(sides));
 
-    // posição inicial: baixa (cai menos) e mais central
     var startX=(Math.random()-.5)*1.8;
     var startY=2.8+idx*0.5;
     var startZ=(Math.random()-.5)*1.8;
     mesh.position.set(startX,startY,startZ);
 
-    // corpo físico
     var body=new CANNON.Body({
       mass:0.4,
       material:S.diceMat,
-      linearDamping:0.55,  // alto: dado para de deslizar rápido
-      angularDamping:0.01, // baixo: continua girando por ~8-10s
+      linearDamping:0.55,
+      // FIX: angularDamping alto para o dado parar de girar naturalmente
+      angularDamping:0.55,
       allowSleep:true,
-      sleepSpeedLimit:0.15,
-      sleepTimeLimit:0.8,
+      sleepSpeedLimit:0.25,  // threshold mais generoso para entrar em sleep
+      sleepTimeLimit:0.6,
     });
     body.addShape(sides===6 ? new CANNON.Box(new CANNON.Vec3(0.6,0.6,0.6)) : new CANNON.Sphere(0.62));
     body.position.set(startX,startY,startZ);
@@ -434,12 +600,11 @@ function rollPool(){
     eq.setFromEuler(Math.random()*Math.PI*2,Math.random()*Math.PI*2,Math.random()*Math.PI*2);
     body.quaternion.copy(eq);
 
-    // velocidade baixa horizontalmente, angular bem alta → gira sem sair do lugar
     body.velocity.set((Math.random()-.5)*1.2,-0.8,(Math.random()-.5)*1.2);
     body.angularVelocity.set(
-      (Math.random()-.5)*30,
-      (Math.random()-.5)*30,
-      (Math.random()-.5)*30
+      (Math.random()-.5)*22,
+      (Math.random()-.5)*22,
+      (Math.random()-.5)*22
     );
 
     S.world.addBody(body);
@@ -468,46 +633,30 @@ function initScene(){
 
   var scene=new THREE.Scene();
   scene.background=new THREE.Color(0x08050f);
-  scene.fog=new THREE.FogExp2(0x08050f,0.042);
+  scene.fog=new THREE.FogExp2(0x08050f,0.038);
 
   var camera=new THREE.PerspectiveCamera(40,sz.w/sz.h,0.1,80);
   camera.position.copy(CAM_HOME); S.camLook.copy(CAM_LOOK_HOME); camera.lookAt(S.camLook);
 
-  // ── Iluminação atmosférica escura estilo velas ────────────────────────
+  // ── Iluminação estilo velas RPG ───────────────────────────────────────
   scene.add(new THREE.AmbientLight(0x1a1030,1.1));
-  // Vela quente principal
-  var candle1=new THREE.PointLight(0xffaa44,1.5,22);
-  candle1.position.set(3.5,2.5,1.5); scene.add(candle1);
-  // Segunda vela mais fria
-  var candle2=new THREE.PointLight(0xff8833,1.0,16);
-  candle2.position.set(-3.2,2.0,2.0); scene.add(candle2);
+  // Luz quente que valoriza a madeira
+  var candle1=new THREE.PointLight(0xffaa44,2.0,28);
+  candle1.position.set(3.5,3.5,1.5); scene.add(candle1);
+  var candle2=new THREE.PointLight(0xff8833,1.2,20);
+  candle2.position.set(-3.2,3.0,2.0); scene.add(candle2);
   // Rim roxo traseiro
   var rim=new THREE.DirectionalLight(0x6040c0,0.5);
   rim.position.set(-2,6,-5); scene.add(rim);
-  // Leve luz de cima bem sutil pra os dados serem visíveis
-  var top=new THREE.DirectionalLight(0x9090c0,0.35);
+  // Luz suave de cima
+  var top=new THREE.DirectionalLight(0xc08060,0.4);
   top.position.set(0,10,0); scene.add(top);
+  // Luz de baixo suave para iluminar as pernas
+  var under=new THREE.PointLight(0x2a1506,0.6,12);
+  under.position.set(0,-1.5,0); scene.add(under);
 
-  // ── Mesa de madeira ────────────────────────────────────────────────────
-  var woodTex=makeTableTexture();
-  var tableTop=new THREE.Mesh(
-    new THREE.CircleGeometry(5.8,80),
-    new THREE.MeshPhongMaterial({map:woodTex,color:0xffffff,shininess:25,specular:new THREE.Color(0x221100)})
-  );
-  tableTop.rotation.x=-Math.PI/2; tableTop.position.y=FLOOR_Y; scene.add(tableTop);
-  var edge=new THREE.Mesh(
-    new THREE.CylinderGeometry(5.8,5.9,0.2,80),
-    new THREE.MeshPhongMaterial({map:woodTex,color:0xffffff,shininess:18})
-  );
-  edge.position.y=FLOOR_Y-0.1; scene.add(edge);
-
-  // ── Anéis mágicos ──────────────────────────────────────────────────────
-  var ring=new THREE.Mesh(new THREE.RingGeometry(2.6,2.7,72),
-    new THREE.MeshBasicMaterial({color:0x4fd6c4,side:THREE.DoubleSide,transparent:true,opacity:0.4}));
-  ring.rotation.x=-Math.PI/2; ring.position.y=FLOOR_Y+0.01; scene.add(ring);
-  var ring2=new THREE.Mesh(new THREE.RingGeometry(4.2,4.28,72),
-    new THREE.MeshBasicMaterial({color:0x9b63cf,side:THREE.DoubleSide,transparent:true,opacity:0.2}));
-  ring2.rotation.x=-Math.PI/2; ring2.position.y=FLOOR_Y+0.01; scene.add(ring2);
+  // ── Mesa 3D com madeira ───────────────────────────────────────────────
+  buildTable(scene);
 
   // ── Partículas de poeira mágica ────────────────────────────────────────
   var pg=new THREE.BufferGeometry(), pp=[], pCount=100;
@@ -529,7 +678,6 @@ function animate(){
   var nowMs=performance.now();
   clock+=0.011;
 
-  // Partículas flutuando
   if(S.particles){
     var pp=S.particles.geometry.attributes.position;
     for(var i=0;i<pp.count;i++){
@@ -539,7 +687,6 @@ function animate(){
     pp.needsUpdate=true;
   }
 
-  // Passo de física
   if(S.world){
     var nowSec=nowMs/1000;
     if(S.lastStepTime!==null){
@@ -548,22 +695,38 @@ function animate(){
     }
     S.lastStepTime=nowSec;
 
-    // Copiar física → Three.js
     S.dice.forEach(function(d){
       d.mesh.position.copy(d.body.position);
       d.mesh.quaternion.copy(d.body.quaternion);
     });
 
-    // Detectar se todos pararam (e tempo mínimo passou)
-    if(S.rolling && (nowMs-S.rollStartTime)>MIN_ROLL_MS){
-      var allSleeping=S.dice.length>0 && S.dice.every(function(d){
-        return d.body.sleepState===2; // CANNON.Body.SLEEPING
-      });
-      if(allSleeping){ S.rolling=false; revealResults(); }
+    // ── Detectar parada: verificação dupla + hard cap de tempo ──────────
+    if(S.rolling){
+      var elapsed = nowMs - S.rollStartTime;
+      var pastMin = elapsed > MIN_ROLL_MS;
+      var pastMax = elapsed > MAX_ROLL_MS;
+
+      if(pastMin || pastMax){
+        var allStopped = S.dice.length > 0 && S.dice.every(function(d){
+          return isDiceStopped(d.body);
+        });
+
+        if(allStopped || pastMax){
+          // Força todos a parar se hard cap atingido
+          if(pastMax){
+            S.dice.forEach(function(d){
+              d.body.velocity.set(0,0,0);
+              d.body.angularVelocity.set(0,0,0);
+              d.body.sleep();
+            });
+          }
+          S.rolling=false;
+          revealResults();
+        }
+      }
     }
   }
 
-  // Câmera
   var cp=S.camPhase, ct, ot;
   if(cp==='zoomIn'){
     ct=Math.min(1,(nowMs-S.camPhaseStart)/900);
