@@ -1,1 +1,409 @@
-VER_PLACEHOLDER
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dados 3D RPG</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=EB+Garamond:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root{
+      --bg:#0b0d1a;--surf:rgba(18,22,40,.82);--surf2:rgba(18,22,40,.96);
+      --border:rgba(193,203,255,.12);--text:#f4efe7;--muted:#bbb7c9;
+      --pri:#7b91c9;--acc:#d1b574;
+    }
+    [data-theme="light"]{
+      --bg:#f3efe8;--surf:rgba(255,250,244,.82);--surf2:rgba(255,250,244,.96);
+      --border:rgba(48,38,27,.14);--text:#241b14;--muted:#5b5147;
+      --pri:#355f84;--acc:#a78a4c;
+    }
+    *,*::before,*::after{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;min-height:100dvh;font-family:'Inter',sans-serif;
+      font-size:clamp(1rem,.95rem + .25vw,1.125rem);color:var(--text);
+      background:
+        radial-gradient(circle at 50% 0%,rgba(124,149,224,.18),transparent 26%),
+        linear-gradient(180deg,rgba(8,10,21,.88),rgba(9,10,22,.98)),
+        var(--bg);
+    }
+    button,input{font:inherit;cursor:pointer}
+    canvas,svg{display:block}
+    .page{padding:1rem}
+    .topbar{
+      position:sticky;top:0;z-index:20;
+      display:flex;justify-content:space-between;align-items:center;gap:1rem;
+      padding:1rem 1.25rem;margin-bottom:1rem;
+      border:1px solid var(--border);border-radius:1.75rem;
+      background:color-mix(in oklab,var(--surf2) 88%,transparent);
+      backdrop-filter:blur(18px);box-shadow:0 12px 32px rgba(0,0,0,.22);
+    }
+    .brand{display:flex;align-items:center;gap:1rem}
+    .brand__logo{
+      width:3.5rem;height:3.5rem;border-radius:1rem;
+      display:grid;place-items:center;color:var(--acc);
+      background:radial-gradient(circle at top,rgba(209,181,116,.22),rgba(18,22,40,.88));
+      border:1px solid rgba(209,181,116,.18);
+    }
+    .brand__logo svg{width:2rem;height:2rem}
+    .label{margin:0 0 .2rem;text-transform:uppercase;letter-spacing:.14em;font-size:.75rem;color:var(--muted)}
+    h1,h2,h3{margin:0;line-height:1.08;font-family:'Cinzel',serif}
+    h1{font-size:clamp(1.3rem,1.1rem + 1vw,2rem)}
+    h2{font-size:clamp(1.1rem,.9rem + .6vw,1.4rem)}
+    h3{font-size:1.05rem}
+    p{line-height:1.6;margin:0 0 .75rem}
+    .topbar__actions{display:flex;align-items:center;gap:.75rem}
+    button{
+      min-height:44px;border-radius:.875rem;border:1px solid var(--border);
+      transition:transform 160ms ease,box-shadow 160ms ease;
+    }
+    .btn-icon,.btn-sec,.btn-dice{
+      background:color-mix(in oklab,var(--surf2) 92%,transparent);color:var(--text);
+    }
+    .btn-pri{
+      padding:0 1.25rem;color:#fff;border-color:rgba(123,145,201,.22);
+      background:linear-gradient(180deg,rgba(123,145,201,.95),rgba(80,104,172,.95));
+      box-shadow:0 0 24px rgba(123,145,201,.2);
+    }
+    .btn-sec{padding:0 1rem}
+    .btn-dice{padding:.75rem 1rem;font-weight:700;letter-spacing:.03em;font-size:1.05rem}
+    button:hover{transform:translateY(-1px);box-shadow:0 0 0 1px rgba(123,145,201,.2),0 8px 30px rgba(13,16,34,.18)}
+    button:focus-visible,input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+    .layout{display:grid;grid-template-columns:320px minmax(0,1fr);gap:1rem}
+    .sidebar{display:grid;gap:1rem;align-content:start}
+    .panel,.stage-card,.canvas-wrap,.feat-card{
+      border:1px solid var(--border);
+      background:color-mix(in oklab,var(--surf) 90%,transparent);
+      backdrop-filter:blur(18px);box-shadow:0 10px 30px rgba(0,0,0,.16);
+    }
+    .panel{padding:1.25rem;border-radius:1.75rem}
+    .panel--glow{box-shadow:0 0 0 1px rgba(123,145,201,.1),0 0 40px rgba(123,145,201,.12)}
+    .panel__hd{margin-bottom:1rem}
+    .dice-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.75rem}
+    .field{display:grid;gap:.5rem;margin-bottom:1rem}
+    .field input{
+      min-height:48px;padding:0 1rem;border-radius:.875rem;
+      border:1px solid var(--border);background:rgba(8,10,20,.28);color:var(--text);
+    }
+    .result-box{
+      display:grid;gap:.5rem;padding:1rem;border-radius:1.25rem;
+      background:linear-gradient(180deg,rgba(209,181,116,.08),rgba(123,145,201,.1));
+      border:1px solid rgba(209,181,116,.12);
+    }
+    .result-box small{color:var(--muted);font-size:.85rem}
+    #roll-display{font-size:clamp(1.3rem,1.1rem + .8vw,1.9rem);font-family:'Cinzel',serif}
+    #roll-total{color:var(--muted);font-size:.9rem}
+    .stage{display:grid;gap:1rem}
+    .stage-card{
+      display:flex;justify-content:space-between;gap:1.25rem;align-items:flex-end;
+      padding:1.5rem;border-radius:1.75rem;
+    }
+    .stage-card p{color:var(--muted);font-family:'EB Garamond',serif;font-size:1.05rem;margin:0}
+    .canvas-wrap{
+      position:relative;min-height:520px;overflow:hidden;border-radius:2rem;
+      background:
+        radial-gradient(circle at 50% 20%,rgba(123,145,201,.16),transparent 26%),
+        linear-gradient(180deg,rgba(10,12,24,.72),rgba(8,10,21,.94));
+    }
+    #dice-canvas{width:100%;height:520px;display:block}
+    .status-bar{
+      position:absolute;left:1rem;bottom:1rem;
+      display:flex;align-items:center;gap:.6rem;
+      padding:.5rem .9rem;border-radius:999px;
+      background:rgba(10,12,24,.75);border:1px solid var(--border);
+      backdrop-filter:blur(10px);font-size:.82rem;color:var(--muted);
+    }
+    .status-dot{
+      width:.6rem;height:.6rem;flex-shrink:0;border-radius:999px;
+      background:#8fdf88;box-shadow:0 0 0 5px rgba(143,223,136,.14);
+    }
+    .status-dot.rolling{background:#d1b574;box-shadow:0 0 0 5px rgba(209,181,116,.18)}
+    #status-msg{margin:0;line-height:1}
+    .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+    .feat-card{padding:1.25rem;border-radius:1.75rem}
+    .feat-card h3{margin-bottom:.4rem}
+    .feat-card p{color:var(--muted);font-family:'EB Garamond',serif;font-size:1rem;margin:0}
+    @media(max-width:960px){
+      .layout{grid-template-columns:1fr}
+      .stage-card,.topbar{flex-direction:column;align-items:stretch}
+      .feats{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand__logo">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M32 6 55 18.5v27L32 58 9 45.5v-27Z" fill="none" stroke="currentColor" stroke-width="2.4"/>
+          <path d="M32 6v52M9 18.5 32 31l23-12.5" fill="none" stroke="currentColor" stroke-width="2.4"/>
+        </svg>
+      </div>
+      <div>
+        <p class="label">Biblioteca Arcana</p>
+        <h1>Dados 3D RPG</h1>
+      </div>
+    </div>
+    <div class="topbar__actions">
+      <button class="btn-icon" id="theme-btn" aria-label="Tema claro/escuro" title="Alternar tema">◐</button>
+      <button class="btn-pri" id="btn-roll-sel">Rolar dado</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="panel panel--glow">
+        <div class="panel__hd"><p class="label">Selecionar</p><h2>Tipo de dado</h2></div>
+        <div class="dice-grid">
+          <button class="btn-dice" data-dice="d4">d4</button>
+          <button class="btn-dice" data-dice="d6">d6</button>
+          <button class="btn-dice" data-dice="d8">d8</button>
+          <button class="btn-dice" data-dice="d10">d10</button>
+          <button class="btn-dice" data-dice="d12">d12</button>
+          <button class="btn-dice" data-dice="d20">d20</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__hd"><p class="label">Rolagem múltipla</p><h2>Expressão</h2></div>
+        <label class="field">
+          <span>Ex: 2d6+3, 1d20, 4d8-2</span>
+          <input id="notation-input" type="text" value="1d20" placeholder="1d20" />
+        </label>
+        <button class="btn-sec" id="btn-roll-notation">Rolar expressão</button>
+      </section>
+
+      <section class="panel">
+        <div class="panel__hd"><p class="label">Resultado</p><h2>Última rolagem</h2></div>
+        <div class="result-box">
+          <small>Valores obtidos</small>
+          <strong id="roll-display">—</strong>
+          <span id="roll-total">Nenhuma rolagem ainda</span>
+        </div>
+      </section>
+    </aside>
+
+    <section class="stage">
+      <div class="stage-card">
+        <div>
+          <p class="label">Mesa de jogo</p>
+          <h2>Rolagem com física 3D</h2>
+          <p>Clique em um dado ou insira uma expressão para lançar. Os dados rolam com física real — gravidade, colisão e torque.</p>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="dice-canvas"></canvas>
+        <div class="status-bar">
+          <span class="status-dot" id="status-dot"></span>
+          <p id="status-msg">Pronto para rolar</p>
+        </div>
+      </div>
+
+      <div class="feats">
+        <article class="feat-card">
+          <p class="label">Como usar</p>
+          <h3>Dado simples</h3>
+          <p>Clique em d4, d6, d8, d10, d12 ou d20 para lançar um dado na mesa.</p>
+        </article>
+        <article class="feat-card">
+          <p class="label">Como usar</p>
+          <h3>Múltiplos dados</h3>
+          <p>Digite uma expressão como 2d6+3 e clique em “Rolar expressão”.</p>
+        </article>
+        <article class="feat-card">
+          <p class="label">Como usar</p>
+          <h3>Modificadores</h3>
+          <p>Use + ou − para bônus e penalidades. Ex: 1d20+5 ou 3d6-2.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Bibliotecas embutidas: funcionam sem servidor e sem internet -->
+<script>/* THREE.JS r128 INLINE - see github.com/mrdoob/three.js */
+VER_THREE_PLACEHOLDER
+</script>
+<script>/* CANNON-ES 0.20 INLINE */
+VER_CANNON_PLACEHOLDER
+</script>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  var notInput=document.getElementById('notation-input');
+  var rollDisp=document.getElementById('roll-display');
+  var rollTotal=document.getElementById('roll-total');
+  var diceBtns=document.querySelectorAll('.btn-dice');
+  var btnSel=document.getElementById('btn-roll-sel');
+  var btnNot=document.getElementById('btn-roll-notation');
+  var themeBtn=document.getElementById('theme-btn');
+  var statusMsg=document.getElementById('status-msg');
+  var statusDot=document.getElementById('status-dot');
+  var canvas=document.getElementById('dice-canvas');
+  var SIDES={d4:4,d6:6,d8:8,d10:10,d12:12,d20:20};
+  var S={sel:'d20',theme:'dark',renderer:null,scene:null,camera:null,dice:[],world:null,rolling:false};
+  function setStatus(msg,state){
+    statusMsg.textContent=msg;
+    statusDot.className='status-dot'+(state==='rolling'?' rolling':'');
+  }
+  function setTheme(t){
+    S.theme=t;root.setAttribute('data-theme',t);
+    if(S.scene)S.scene.background=new THREE.Color(t==='dark'?0x0b0d1a:0xf3efe8);
+  }
+  function parseNotation(raw){
+    var m=raw.trim().toLowerCase().match(/^(\d*)d(\d+)([+-]\d+)?$/);
+    if(!m)return null;
+    return{count:Number(m[1]||1),sides:Number(m[2]),mod:Number(m[3]||0)};
+  }
+  function rollDie(s){return Math.floor(Math.random()*s)+1;}
+  function runNotation(expr){
+    var p=parseNotation(expr);
+    if(!p){setStatus('Formato inválido — use algo como 2d6+3');return;}
+    var rolls=[],i;
+    for(i=0;i<p.count;i++)rolls.push(rollDie(p.sides));
+    var total=rolls.reduce(function(a,b){return a+b;},0)+p.mod;
+    rollDisp.textContent=rolls.join('  +  ');
+    rollTotal.textContent='Total: '+total+(p.mod?(p.mod>0?' (+'+p.mod+')':' ('+p.mod+')'):'');
+    throwDice(p.count,p.sides);
+  }
+  function selectDie(die){
+    S.sel=die;
+    diceBtns.forEach(function(btn){
+      var a=btn.dataset.dice===die;
+      btn.setAttribute('aria-pressed',String(a));
+      btn.style.borderColor=a?'rgba(209,181,116,.55)':'var(--border)';
+      btn.style.boxShadow=a?'0 0 0 1px rgba(123,145,201,.22),0 0 24px rgba(123,145,201,.2)':'none';
+    });
+  }
+  function geomFor(sides){
+    if(sides===4)return new THREE.TetrahedronGeometry(0.95);
+    if(sides===6)return new THREE.BoxGeometry(1.2,1.2,1.2);
+    if(sides===8)return new THREE.OctahedronGeometry(0.95);
+    if(sides===10)return new THREE.CylinderGeometry(0.7,0.7,1.15,10);
+    if(sides===12)return new THREE.DodecahedronGeometry(0.88);
+    return new THREE.IcosahedronGeometry(0.95);
+  }
+  function makeMat(){
+    return new THREE.MeshStandardMaterial({
+      color:S.theme==='dark'?0xd7c08a:0x7f6832,
+      roughness:.32,metalness:.16,
+      emissive:S.theme==='dark'?0x18213a:0x000000,
+      emissiveIntensity:.55
+    });
+  }
+  function buildWorld(){
+    S.world=new CANNON.World({gravity:new CANNON.Vec3(0,-24,0),allowSleep:true});
+    S.world.solver.iterations=16;
+    var fl=new CANNON.Body({mass:0,shape:new CANNON.Plane()});
+    fl.quaternion.setFromEuler(-Math.PI/2,0,0);
+    fl.position.set(0,-1.1,0);
+    S.world.addBody(fl);
+    function w(x,z,ry){
+      var b=new CANNON.Body({mass:0,shape:new CANNON.Box(new CANNON.Vec3(8,3,0.18))});
+      b.position.set(x,0,z);b.quaternion.setFromEuler(0,ry,0);S.world.addBody(b);
+    }
+    w(0,-5.2,0);w(0,5.2,0);w(-5.2,0,Math.PI/2);w(5.2,0,Math.PI/2);
+  }
+  function clearDice(){
+    S.dice.forEach(function(d){
+      S.scene.remove(d.mesh);S.world.removeBody(d.body);
+      d.mesh.geometry.dispose();d.mesh.material.dispose();
+    });
+    S.dice=[];
+  }
+  function spawnDice(count,sides){
+    clearDice();
+    var spread=Math.max(1.4,Math.min(3.6,count*.8)),i;
+    for(i=0;i<count;i++){
+      var mesh=new THREE.Mesh(geomFor(sides),makeMat());
+      var shape=sides===6?new CANNON.Box(new CANNON.Vec3(.6,.6,.6)):new CANNON.Sphere(.65);
+      var body=new CANNON.Body({mass:1,shape:shape,linearDamping:.28,angularDamping:.3,allowSleep:true});
+      body.position.set((Math.random()-.5)*spread,4+i*.7,(Math.random()-.5)*spread);
+      body.quaternion.setFromEuler(Math.random()*Math.PI,Math.random()*Math.PI,Math.random()*Math.PI);
+      mesh.position.copy(body.position);mesh.quaternion.copy(body.quaternion);
+      S.scene.add(mesh);S.world.addBody(body);
+      S.dice.push({mesh:mesh,body:body,sides:sides});
+    }
+  }
+  function throwDice(count,sides){
+    if(!S.world)return;
+    S.rolling=true;setStatus('Rolando…','rolling');
+    spawnDice(count,sides);
+    S.dice.forEach(function(d){
+      var f=5+Math.random()*5;
+      d.body.wakeUp();
+      d.body.applyImpulse(new CANNON.Vec3((Math.random()-.5)*f,f,(Math.random()-.5)*f),d.body.position);
+      d.body.angularVelocity.set((Math.random()-.5)*24,(Math.random()-.5)*24,(Math.random()-.5)*24);
+    });
+  }
+  var D6F=[
+    {ax:new THREE.Vector3(0,1,0),v:1},{ax:new THREE.Vector3(0,-1,0),v:6},
+    {ax:new THREE.Vector3(1,0,0),v:2},{ax:new THREE.Vector3(-1,0,0),v:5},
+    {ax:new THREE.Vector3(0,0,1),v:3},{ax:new THREE.Vector3(0,0,-1),v:4}
+  ];
+  function faceD6(mesh){
+    var up=new THREE.Vector3(0,1,0),best=-Infinity,f=0;
+    D6F.forEach(function(d){var dot=d.ax.clone().applyQuaternion(mesh.quaternion).dot(up);if(dot>best){best=dot;f=d.v;}});
+    return f;
+  }
+  function initScene(){
+    var W=canvas.parentElement.clientWidth||800,H=520;
+    canvas.width=W;canvas.height=H;
+    var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+    renderer.setSize(W,H);
+    var scene=new THREE.Scene();
+    scene.background=new THREE.Color(0x0b0d1a);
+    var camera=new THREE.PerspectiveCamera(40,W/H,.1,100);
+    camera.position.set(0,7.5,10);camera.lookAt(0,-.5,0);
+    scene.add(new THREE.AmbientLight(0xb4c3ff,1.7));
+    var key=new THREE.DirectionalLight(0x9db5ff,2.8);key.position.set(6,10,5);scene.add(key);
+    var warm=new THREE.PointLight(0xd1b574,28,32,2);warm.position.set(-5,4,2);scene.add(warm);
+    var fm=new THREE.Mesh(new THREE.CircleGeometry(5.2,80),new THREE.MeshStandardMaterial({color:0x161a2c,roughness:1}));
+    fm.rotation.x=-Math.PI/2;fm.position.y=-1.1;scene.add(fm);
+    S.renderer=renderer;S.scene=scene;S.camera=camera;
+    buildWorld();
+    setStatus('Pronto para rolar');
+    animate();
+  }
+  function animate(){
+    requestAnimationFrame(animate);
+    if(S.world)S.world.fixedStep();
+    S.dice.forEach(function(d){d.mesh.position.copy(d.body.position);d.mesh.quaternion.copy(d.body.quaternion);});
+    if(S.rolling&&S.dice.length>0){
+      var ok=S.dice.every(function(d){return d.body.sleepState===CANNON.Body.SLEEPING;});
+      if(ok){S.rolling=false;setStatus('Dado parou');}
+    }
+    S.renderer.render(S.scene,S.camera);
+  }
+  window.addEventListener('resize',function(){
+    if(!S.renderer||!S.camera)return;
+    var w=canvas.parentElement.clientWidth||800;
+    S.renderer.setSize(w,520);S.camera.aspect=w/520;S.camera.updateProjectionMatrix();
+  });
+  diceBtns.forEach(function(btn){
+    btn.addEventListener('click',function(){
+      selectDie(btn.dataset.dice);
+      notInput.value='1'+btn.dataset.dice;
+      runNotation('1'+btn.dataset.dice);
+    });
+  });
+  btnSel.addEventListener('click',function(){runNotation('1'+S.sel);});
+  btnNot.addEventListener('click',function(){runNotation(notInput.value);});
+  themeBtn.addEventListener('click',function(){setTheme(S.theme==='dark'?'light':'dark');});
+  notInput.addEventListener('keydown',function(e){if(e.key==='Enter')runNotation(notInput.value);});
+  selectDie(S.sel);
+  setTheme(S.theme);
+  if(typeof THREE!=='undefined'&&typeof CANNON!=='undefined'){
+    initScene();
+  }else{
+    setStatus('Recarregue a página para inicializar');
+  }
+})();
+</script>
+</body>
+</html>
