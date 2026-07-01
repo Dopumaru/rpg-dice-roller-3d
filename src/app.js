@@ -22,7 +22,7 @@ if (typeof THREE === 'undefined' || typeof CANNON === 'undefined') {
 // ─── Constantes ────────────────────────────────────────────────────────────
 var SIDES_MAP  = { d4:4, d6:6, d8:8, d10:10, d12:12, d20:20 };
 var DICE_COLOR = { 4:0xc9a3ed, 6:0xb583e0, 8:0xa873d6, 10:0x9b63cf, 12:0x8f54c4, 20:0xc28ee8 };
-var UP         = new THREE.Vector3(0,1,0);
+var UP            = new THREE.Vector3(0,1,0);
 var CAM_HOME      = new THREE.Vector3(0,7,10);
 var CAM_LOOK_HOME = new THREE.Vector3(0,-0.5,0);
 var FLOOR_Y    = -1.1;
@@ -33,147 +33,140 @@ var MAX_ROLL_MS = 14000;
 var S = {
   pool: {},
   renderer: null, scene: null, camera: null,
-  world: null,
-  dice: [],
-  rolling: false,
-  rollStartTime: 0,
+  world: null, dice: [],
+  rolling: false, rollStartTime: 0,
   camLook: new THREE.Vector3(),
   camPhase: 'idle', camPhaseStart: 0,
   camFromPos: new THREE.Vector3(), camToPos: new THREE.Vector3(),
   camFromLook: new THREE.Vector3(), camToLook: new THREE.Vector3(),
-  revealQueue: [],
-  suspenseTimer: null,
-  lastStepTime: null,
+  revealQueue: [], suspenseTimer: null, lastStepTime: null,
   particles: null, partOrigPos: null,
   pendingTotal: 0, pendingParts: '', pendingByType: {},
 };
 
-// ──────────────────────────────────────────────────────────────────────────
-// ─── SISTEMA DE SOM (Web Audio API — 100% procedural, sem arquivos) ──────
-// ──────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
+// ─── SISTEMA DE SOM ─────────────────────────────────────────────────────────
+// IMPORTANTE: AudioContext DEVE ser criado/resumido dentro de um
+// handler de clique do usuário. Criado fora bloqueia no Chrome/Safari.
+// ─────────────────────────────────────────────────────────────────────────
 var AC = null;
 
-function getAC() {
+// Chamado UMA vez dentro do clique do botão rolar (user gesture garantido)
+function initAC() {
   if (!AC) {
-    try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+    try { AC = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { AC = null; return; }
   }
-  // Safari/Chrome bloqueiam o contexto até uma interação do usuário
-  if (AC && AC.state === 'suspended') AC.resume();
-  return AC;
+  if (AC.state === 'suspended') AC.resume();
 }
 
-// Arremesso: swoosh rápido (ruído branco filtrado descendente)
+function getAC() { return AC; }
+
+// Som de arremesso — swoosh (ruído branco filtrado com decay)
 function sndThrow() {
   var ac = getAC(); if (!ac) return;
-  var buf = ac.createBuffer(1, ac.sampleRate * 0.35, ac.sampleRate);
-  var d   = buf.getChannelData(0);
-  for (var i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 1.8);
-  var src = ac.createBufferSource();
-  src.buffer = buf;
-  var filt = ac.createBiquadFilter();
-  filt.type = 'bandpass'; filt.frequency.value = 1800; filt.Q.value = 0.8;
+  var buf = ac.createBuffer(1, ac.sampleRate * 0.4, ac.sampleRate);
+  var d = buf.getChannelData(0);
+  for (var i = 0; i < d.length; i++)
+    d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 1.6);
+  var src  = ac.createBufferSource(); src.buffer = buf;
+  var filt = ac.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=1600; filt.Q.value=0.7;
   var gain = ac.createGain();
-  gain.gain.setValueAtTime(0.38, ac.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.35);
+  gain.gain.setValueAtTime(0.45, ac.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.4);
   src.connect(filt); filt.connect(gain); gain.connect(ac.destination);
   src.start();
 }
 
-// Rolando: loop de ruído suave (crepitar/chacoalhar)
-var _rollSrc = null;
-var _rollGain = null;
+// Loop de rolagem — chacoalhar contínuo
+var _rollSrc = null, _rollGain = null;
 function sndRollStart() {
   var ac = getAC(); if (!ac) return;
   sndRollStop();
-  // Buffer de 0.5s de ruído modelado para soar como chocalhar
   var dur = 0.5;
   var buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
-  var d   = buf.getChannelData(0);
+  var d = buf.getChannelData(0);
   for (var i = 0; i < d.length; i++) {
-    var env = Math.sin(Math.PI * (i / d.length)); // fade in+out para loop suave
-    d[i] = (Math.random() * 2 - 1) * env * 0.6;
+    var env = Math.sin(Math.PI * (i / d.length));
+    d[i] = (Math.random()*2-1) * env * 0.7;
   }
-  var src = ac.createBufferSource();
-  src.buffer = buf;
-  src.loop = true;
-  var filt = ac.createBiquadFilter();
-  filt.type = 'bandpass'; filt.frequency.value = 900; filt.Q.value = 1.2;
-  var gain = ac.createGain();
-  gain.gain.setValueAtTime(0.22, ac.currentTime);
+  var src  = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+  var filt = ac.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=1000; filt.Q.value=1.0;
+  var gain = ac.createGain(); gain.gain.setValueAtTime(0.28, ac.currentTime);
   src.connect(filt); filt.connect(gain); gain.connect(ac.destination);
   src.start();
   _rollSrc = src; _rollGain = gain;
 }
 function sndRollStop() {
-  if (_rollSrc) {
-    try {
-      var ac = getAC();
-      if (_rollGain && ac) {
-        _rollGain.gain.setValueAtTime(_rollGain.gain.value, ac.currentTime);
-        _rollGain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.4);
-      }
-      var s = _rollSrc;
-      setTimeout(function(){ try { s.stop(); } catch(e){} }, 450);
-    } catch(e) {}
-    _rollSrc = null; _rollGain = null;
-  }
+  if (!_rollSrc) return;
+  try {
+    var ac = getAC();
+    if (_rollGain && ac) {
+      _rollGain.gain.setValueAtTime(_rollGain.gain.value, ac.currentTime);
+      _rollGain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.35);
+    }
+    var s = _rollSrc;
+    setTimeout(function(){ try { s.stop(); } catch(e){} }, 400);
+  } catch(e) {}
+  _rollSrc = null; _rollGain = null;
 }
 
-// Impacto: golpe percussivo curto (dado batendo na mesa)
-function sndHit() {
+// Quique / impacto — percussão curta (chama a cada colisão forte)
+var _lastBounceTime = 0;
+function sndBounce(force) {
   var ac = getAC(); if (!ac) return;
-  // Oscilador de baixa freq (corpo do impacto) + ruído (textura)
-  var osc  = ac.createOscillator();
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(200, ac.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(60, ac.currentTime + 0.12);
-  var gOsc = ac.createGain();
-  gOsc.gain.setValueAtTime(0.5, ac.currentTime);
-  gOsc.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.18);
-  osc.connect(gOsc); gOsc.connect(ac.destination);
-  osc.start(); osc.stop(ac.currentTime + 0.18);
+  var now = ac.currentTime;
+  // Debounce: no máximo 1 som a cada 80ms para não saturar
+  if (now - _lastBounceTime < 0.08) return;
+  _lastBounceTime = now;
 
-  // Camada de ruído
-  var buf = ac.createBuffer(1, ac.sampleRate * 0.12, ac.sampleRate);
+  var vol = Math.min(1.0, (force || 1) * 0.12);
+
+  // Corpo do impacto: oscilador com pitch drop
+  var osc = ac.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(280, now);
+  osc.frequency.exponentialRampToValueAtTime(55, now + 0.15);
+  var gOsc = ac.createGain();
+  gOsc.gain.setValueAtTime(vol * 0.7, now);
+  gOsc.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+  osc.connect(gOsc); gOsc.connect(ac.destination);
+  osc.start(now); osc.stop(now + 0.22);
+
+  // Camada de clique agudo (textura de feltro/madeira)
+  var len = Math.floor(ac.sampleRate * 0.09);
+  var buf = ac.createBuffer(1, len, ac.sampleRate);
   var d   = buf.getChannelData(0);
-  for (var i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-  var ns  = ac.createBufferSource();
-  ns.buffer = buf;
-  var filt = ac.createBiquadFilter();
-  filt.type = 'highpass'; filt.frequency.value = 2200;
-  var gNs = ac.createGain();
-  gNs.gain.setValueAtTime(0.3, ac.currentTime);
-  gNs.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.12);
+  for (var i = 0; i < len; i++) d[i] = (Math.random()*2-1) * (1 - i/len);
+  var ns   = ac.createBufferSource(); ns.buffer = buf;
+  var filt = ac.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=3500; filt.Q.value=1.5;
+  var gNs  = ac.createGain();
+  gNs.gain.setValueAtTime(vol * 0.5, now);
+  gNs.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
   ns.connect(filt); filt.connect(gNs); gNs.connect(ac.destination);
-  ns.start();
+  ns.start(now);
 }
 
-// Resultado: acorde mágico ascendente (arpegio de 4 notas)
+// Acorde mágico de resultado
 function sndResult() {
   var ac = getAC(); if (!ac) return;
-  // Ré-Mi-Sol-Si (escala de Ré maior, clima RPG)
   var freqs = [293.66, 329.63, 392.00, 493.88];
   freqs.forEach(function(freq, i) {
     var t = ac.currentTime + i * 0.13;
-    var osc  = ac.createOscillator();
-    osc.type = 'triangle';
+    var osc  = ac.createOscillator(); osc.type = 'triangle';
     osc.frequency.setValueAtTime(freq, t);
-    // Vibrato leve
-    var lfo = ac.createOscillator();
-    lfo.frequency.value = 5.5;
+    var lfo  = ac.createOscillator(); lfo.frequency.value = 5.5;
     var lfoG = ac.createGain(); lfoG.gain.value = 4;
     lfo.connect(lfoG); lfoG.connect(osc.frequency);
     var gain = ac.createGain();
     gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(0.18, t + 0.05);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 1.1);
-    // Leve reverb simulado com delay
-    var dly  = ac.createDelay(0.5);
-    dly.delayTime.value = 0.22;
-    var dlyG = ac.createGain(); dlyG.gain.value = 0.28;
+    gain.gain.linearRampToValueAtTime(0.20, t + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+    var dly  = ac.createDelay(0.5); dly.delayTime.value = 0.22;
+    var dlyG = ac.createGain(); dlyG.gain.value = 0.3;
     osc.connect(gain); gain.connect(ac.destination);
     gain.connect(dly); dly.connect(dlyG); dlyG.connect(ac.destination);
-    lfo.start(t); osc.start(t); osc.stop(t + 1.4); lfo.stop(t + 1.4);
+    lfo.start(t); osc.start(t); osc.stop(t + 1.5); lfo.stop(t + 1.5);
   });
 }
 
@@ -184,19 +177,18 @@ function updatePoolUI() {
   if (!keys.length) { poolChips.appendChild(poolEmpty); poolEmpty.style.display=''; return; }
   poolEmpty.style.display = 'none';
   keys.sort(function(a,b){return a-b;}).forEach(function(sides) {
-    var chip = document.createElement('div');
-    chip.className = 'pool-chip';
+    var chip = document.createElement('div'); chip.className = 'pool-chip';
     chip.innerHTML =
-      '<img class="chip-icon" src="src/dice/d'+sides+'.png" alt=""/>' +
-      '<span class="chip-label">'+S.pool[sides]+'×d'+sides+'</span>' +
-      '<button class="chip-inc" data-sides="'+sides+'">+</button>' +
-      '<button class="chip-dec" data-sides="'+sides+'">−</button>' +
+      '<img class="chip-icon" src="src/dice/d'+sides+'.png" alt=""/>'+
+      '<span class="chip-label">'+S.pool[sides]+'×d'+sides+'</span>'+
+      '<button class="chip-inc" data-sides="'+sides+'">+</button>'+
+      '<button class="chip-dec" data-sides="'+sides+'">−</button>'+
       '<button class="chip-rm"  data-sides="'+sides+'">✕</button>';
     poolChips.appendChild(chip);
   });
   poolChips.querySelectorAll('.chip-inc').forEach(function(b){ b.addEventListener('click', function(){ addToPool(+b.dataset.sides); }); });
   poolChips.querySelectorAll('.chip-dec').forEach(function(b){ b.addEventListener('click', function(){ var s=+b.dataset.sides; if(S.pool[s]>1)S.pool[s]--; else delete S.pool[s]; updatePoolUI(); }); });
-  poolChips.querySelectorAll('.chip-rm').forEach(function(b){ b.addEventListener('click', function(){ delete S.pool[+b.dataset.sides]; updatePoolUI(); }); });
+  poolChips.querySelectorAll('.chip-rm').forEach(function(b){  b.addEventListener('click', function(){ delete S.pool[+b.dataset.sides]; updatePoolUI(); }); });
 }
 function addToPool(sides) { S.pool[sides]=(S.pool[sides]||0)+1; updatePoolUI(); }
 diceButtons.forEach(function(btn){ btn.addEventListener('click', function(){ addToPool(SIDES_MAP[btn.dataset.dice]); }); });
@@ -221,8 +213,8 @@ function planarizeFaceUVs(geometry) {
     var A=new THREE.Vector3().fromBufferAttribute(pos,verts[0]);
     var B=new THREE.Vector3().fromBufferAttribute(pos,verts[1]);
     var C=new THREE.Vector3().fromBufferAttribute(pos,verts[2]);
-    var normal=new THREE.Vector3().subVectors(B,A).cross(new THREE.Vector3().subVectors(C,A)).normalize();
     var tan=new THREE.Vector3().subVectors(B,A).normalize();
+    var normal=new THREE.Vector3().subVectors(B,A).cross(new THREE.Vector3().subVectors(C,A)).normalize();
     var bitan=new THREE.Vector3().crossVectors(normal,tan).normalize();
     var unique=verts.filter(function(v,i){return verts.indexOf(v)===i;});
     var cen=new THREE.Vector3(); unique.forEach(function(vi){cen.add(new THREE.Vector3().fromBufferAttribute(pos,vi));});
@@ -235,7 +227,7 @@ function planarizeFaceUVs(geometry) {
   geometry.setAttribute('uv',new THREE.BufferAttribute(uvArr,2));
 }
 
-var TRIS = {4:1, 6:null, 8:1, 10:1, 12:3, 20:1};
+var TRIS={4:1,6:null,8:1,10:1,12:3,20:1};
 function geomFor(sides) {
   var geo;
   if(sides===4)      geo=new THREE.TetrahedronGeometry(0.95,0);
@@ -245,18 +237,13 @@ function geomFor(sides) {
   else if(sides===12)geo=new THREE.DodecahedronGeometry(0.88,0);
   else               geo=new THREE.IcosahedronGeometry(0.95,0);
   var tpf=TRIS[sides];
-  if(tpf) {
-    var ni = (geo.index) ? geo.toNonIndexed() : geo;
-    ni.clearGroups();
-    for(var f=0;f<sides;f++) ni.addGroup(f*tpf*3,tpf*3,f);
-    planarizeFaceUVs(ni); ni.computeVertexNormals(); return ni;
-  }
+  if(tpf){var ni=(geo.index)?geo.toNonIndexed():geo; ni.clearGroups(); for(var f=0;f<sides;f++) ni.addGroup(f*tpf*3,tpf*3,f); planarizeFaceUVs(ni); ni.computeVertexNormals(); return ni;}
   return geo;
 }
 
 // ─── Normal local de face ─────────────────────────────────────────────────
-function faceNormalLocal(geo, group) {
-  var pos=geo.attributes.position, idx=geo.index, i0,i1,i2;
+function faceNormalLocal(geo,group){
+  var pos=geo.attributes.position,idx=geo.index,i0,i1,i2;
   if(idx){i0=idx.getX(group.start);i1=idx.getX(group.start+1);i2=idx.getX(group.start+2);}
   else{i0=group.start;i1=group.start+1;i2=group.start+2;}
   var A=new THREE.Vector3().fromBufferAttribute(pos,i0);
@@ -264,14 +251,13 @@ function faceNormalLocal(geo, group) {
   var C=new THREE.Vector3().fromBufferAttribute(pos,i2);
   return new THREE.Vector3().subVectors(B,A).cross(new THREE.Vector3().subVectors(C,A)).normalize();
 }
-function getTopFace(mesh) {
+function getTopFace(mesh){
   var geo=mesh.geometry;
   if(!geo.groups||geo.groups.length===0) return 1;
-  var best=-Infinity, top=1;
+  var best=-Infinity,top=1;
   geo.groups.forEach(function(group,i){
     var worldN=faceNormalLocal(geo,group).applyQuaternion(mesh.quaternion);
-    var dot=worldN.dot(UP);
-    if(dot>best){best=dot;top=i+1;}
+    if(worldN.dot(UP)>best){best=worldN.dot(UP);top=i+1;}
   });
   return top;
 }
@@ -288,7 +274,6 @@ var crackTex=(function(){
   }
   var t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(2,2); return t;
 })();
-
 var envTex=new THREE.TextureLoader().load('src/dice/d20.png');
 envTex.mapping=THREE.SphericalReflectionMapping;
 
@@ -302,7 +287,7 @@ function shade(hex,amt){
 function faceTex(n,sides){
   var key=sides+'_'+n; if(faceTexCache[key]) return faceTexCache[key];
   var sz=256,c=document.createElement('canvas'); c.width=sz;c.height=sz;
-  var ctx=c.getContext('2d'), base=DICE_COLOR[sides]||0xb583e0;
+  var ctx=c.getContext('2d'),base=DICE_COLOR[sides]||0xb583e0;
   var grad=ctx.createRadialGradient(sz*.38,sz*.32,sz*.04,sz*.5,sz*.5,sz*.74);
   grad.addColorStop(0,shade(base,0.2)); grad.addColorStop(1,shade(base,-0.65));
   ctx.fillStyle=grad; ctx.fillRect(0,0,sz,sz);
@@ -317,118 +302,117 @@ function faceTex(n,sides){
 function materialsFor(sides){
   var mats=[];
   for(var i=1;i<=sides;i++) mats.push(new THREE.MeshPhongMaterial({
-    map:faceTex(i,sides), color:0xffffff,
-    emissive:new THREE.Color(0x2a1540), emissiveIntensity:0.22,
-    flatShading:true, shininess:18, specular:new THREE.Color(0x150a22),
-    envMap:envTex, combine:THREE.MixOperation, reflectivity:0.06,
-    bumpMap:crackTex, bumpScale:0.022, transparent:true, opacity:0.97,
+    map:faceTex(i,sides),color:0xffffff,
+    emissive:new THREE.Color(0x2a1540),emissiveIntensity:0.22,
+    flatShading:true,shininess:18,specular:new THREE.Color(0x150a22),
+    envMap:envTex,combine:THREE.MixOperation,reflectivity:0.06,
+    bumpMap:crackTex,bumpScale:0.022,transparent:true,opacity:0.97,
   }));
   return mats;
 }
 
-// ─── Easing ──────────────────────────────────────────────────────────────
+// ─── Easing ─────────────────────────────────────────────────────────────
 function easeInOutCubic(t){return t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;}
 
-// ─── Texturas de madeira e feltro ─────────────────────────────────────────────
-function makeWoodTexture(repeatU, repeatV) {
-  var sz=1024, c=document.createElement('canvas'); c.width=sz; c.height=sz;
+// ─── Texturas madeira / feltro ──────────────────────────────────────────────
+function makeWoodTexture(repeatU,repeatV){
+  var sz=1024,c=document.createElement('canvas'); c.width=sz;c.height=sz;
   var ctx=c.getContext('2d');
   var bg=ctx.createLinearGradient(0,0,sz,sz);
-  bg.addColorStop(0,'#2c1a0e'); bg.addColorStop(0.3,'#3d2310');
-  bg.addColorStop(0.6,'#2a1608'); bg.addColorStop(1,'#1e1006');
+  bg.addColorStop(0,'#2c1a0e');bg.addColorStop(0.3,'#3d2310');bg.addColorStop(0.6,'#2a1608');bg.addColorStop(1,'#1e1006');
   ctx.fillStyle=bg; ctx.fillRect(0,0,sz,sz);
   for(var i=0;i<60;i++){
-    var y0=Math.random()*sz, alpha=0.03+Math.random()*0.09, lighter=Math.random()<0.5;
+    var y0=Math.random()*sz,alpha=0.03+Math.random()*0.09,lighter=Math.random()<0.5;
     ctx.strokeStyle=lighter?'rgba(180,110,50,'+alpha+')':'rgba(10,4,0,'+alpha+')';
     ctx.lineWidth=0.5+Math.random()*2.5; ctx.beginPath(); ctx.moveTo(0,y0);
-    for(var x=0;x<sz;x+=18){y0+=(Math.random()-0.5)*8; ctx.lineTo(x,y0);} ctx.stroke();
+    for(var x=0;x<sz;x+=18){y0+=(Math.random()-0.5)*8;ctx.lineTo(x,y0);} ctx.stroke();
   }
   var knots=2+Math.floor(Math.random()*3);
   for(var k=0;k<knots;k++){
-    var kx=sz*0.15+Math.random()*sz*0.7, ky=sz*0.15+Math.random()*sz*0.7;
+    var kx=sz*0.15+Math.random()*sz*0.7,ky=sz*0.15+Math.random()*sz*0.7;
     for(var r=28;r>0;r-=2){
       var a2=0.015+Math.random()*0.04;
-      ctx.strokeStyle='rgba(15,6,0,'+a2+')'; ctx.lineWidth=1.2;
-      ctx.beginPath(); ctx.ellipse(kx,ky,r,r*0.6,Math.random()*Math.PI,0,Math.PI*2); ctx.stroke();
+      ctx.strokeStyle='rgba(15,6,0,'+a2+')';ctx.lineWidth=1.2;
+      ctx.beginPath();ctx.ellipse(kx,ky,r,r*0.6,Math.random()*Math.PI,0,Math.PI*2);ctx.stroke();
     }
   }
   var gloss=ctx.createLinearGradient(0,0,sz,sz*0.6);
-  gloss.addColorStop(0,'rgba(255,200,130,0.07)'); gloss.addColorStop(0.4,'rgba(255,200,130,0.02)'); gloss.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=gloss; ctx.fillRect(0,0,sz,sz);
+  gloss.addColorStop(0,'rgba(255,200,130,0.07)');gloss.addColorStop(0.4,'rgba(255,200,130,0.02)');gloss.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=gloss;ctx.fillRect(0,0,sz,sz);
   var vig=ctx.createRadialGradient(sz/2,sz/2,sz*0.25,sz/2,sz/2,sz*0.85);
-  vig.addColorStop(0,'rgba(0,0,0,0)'); vig.addColorStop(1,'rgba(0,0,0,0.55)');
-  ctx.fillStyle=vig; ctx.fillRect(0,0,sz,sz);
-  var t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(repeatU||2,repeatV||2); return t;
+  vig.addColorStop(0,'rgba(0,0,0,0)');vig.addColorStop(1,'rgba(0,0,0,0.55)');
+  ctx.fillStyle=vig;ctx.fillRect(0,0,sz,sz);
+  var t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(repeatU||2,repeatV||2);return t;
 }
 function makeFeltTexture(){
-  var sz=512, c=document.createElement('canvas'); c.width=sz; c.height=sz;
+  var sz=512,c=document.createElement('canvas');c.width=sz;c.height=sz;
   var ctx=c.getContext('2d');
-  ctx.fillStyle='#1a3320'; ctx.fillRect(0,0,sz,sz);
+  ctx.fillStyle='#1a3320';ctx.fillRect(0,0,sz,sz);
   for(var i=0;i<12000;i++){
-    var x=Math.random()*sz, y=Math.random()*sz, angle=Math.random()*Math.PI, len=1+Math.random()*2;
+    var x=Math.random()*sz,y=Math.random()*sz,angle=Math.random()*Math.PI,len=1+Math.random()*2;
     var alpha=0.02+Math.random()*0.06;
-    ctx.strokeStyle='rgba(80,160,80,'+alpha+')'; ctx.lineWidth=0.5;
-    ctx.beginPath(); ctx.moveTo(x,y);
-    ctx.lineTo(x+Math.cos(angle)*len, y+Math.sin(angle)*len); ctx.stroke();
+    ctx.strokeStyle='rgba(80,160,80,'+alpha+')';ctx.lineWidth=0.5;
+    ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+Math.cos(angle)*len,y+Math.sin(angle)*len);ctx.stroke();
   }
   var glow=ctx.createRadialGradient(sz/2,sz/2,0,sz/2,sz/2,sz*.5);
-  glow.addColorStop(0,'rgba(100,200,100,0.05)'); glow.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=glow; ctx.fillRect(0,0,sz,sz);
-  var t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(3,3); return t;
+  glow.addColorStop(0,'rgba(100,200,100,0.05)');glow.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=glow;ctx.fillRect(0,0,sz,sz);
+  var t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(3,3);return t;
 }
 
-// ─── Construir mesa 3D ────────────────────────────────────────────────────
-function buildTable(scene) {
-  var woodTex=makeWoodTexture(2,2), woodTexLeg=makeWoodTexture(1,4), feltTex=makeFeltTexture();
+// ─── Mesa 3D ──────────────────────────────────────────────────────────────────
+function buildTable(scene){
+  var woodTex=makeWoodTexture(2,2),woodTexLeg=makeWoodTexture(1,4),feltTex=makeFeltTexture();
   var woodMat   =new THREE.MeshPhongMaterial({map:woodTex,   color:0xffffff,shininess:55,specular:new THREE.Color(0x3a1e08)});
   var woodMatLeg=new THREE.MeshPhongMaterial({map:woodTexLeg,color:0xffffff,shininess:45,specular:new THREE.Color(0x2a1206)});
   var feltMat   =new THREE.MeshPhongMaterial({map:feltTex,   color:0xffffff,shininess:4, specular:new THREE.Color(0x0a1a0a)});
-  var TABLE_Y=FLOOR_Y, SLAB_H=0.22, RADIUS=5.6, LEG_H=2.8, LEG_R=0.18, LEG_DIST=3.8;
+  var TABLE_Y=FLOOR_Y,SLAB_H=0.22,RADIUS=5.6,LEG_H=2.8,LEG_R=0.18,LEG_DIST=3.8;
   var slab=new THREE.Mesh(new THREE.CylinderGeometry(RADIUS,RADIUS,SLAB_H,80),woodMat);
-  slab.position.set(0,TABLE_Y-SLAB_H/2,0); scene.add(slab);
+  slab.position.set(0,TABLE_Y-SLAB_H/2,0);scene.add(slab);
   var felt=new THREE.Mesh(new THREE.CylinderGeometry(RADIUS-0.12,RADIUS-0.12,0.012,80),feltMat);
-  felt.position.set(0,TABLE_Y+0.006,0); scene.add(felt);
+  felt.position.set(0,TABLE_Y+0.006,0);scene.add(felt);
   var rim=new THREE.Mesh(new THREE.CylinderGeometry(RADIUS+0.05,RADIUS+0.14,SLAB_H+0.18,80,1,true),woodMat);
-  rim.position.set(0,TABLE_Y-SLAB_H/2+0.04,0); scene.add(rim);
+  rim.position.set(0,TABLE_Y-SLAB_H/2+0.04,0);scene.add(rim);
   var chamfer=new THREE.Mesh(new THREE.TorusGeometry(RADIUS+0.05,0.07,8,80),woodMat);
-  chamfer.rotation.x=-Math.PI/2; chamfer.position.set(0,TABLE_Y-SLAB_H,0); scene.add(chamfer);
-  var legPositions=[[ LEG_DIST,LEG_DIST],[-LEG_DIST,LEG_DIST],[ LEG_DIST,-LEG_DIST],[-LEG_DIST,-LEG_DIST]];
+  chamfer.rotation.x=-Math.PI/2;chamfer.position.set(0,TABLE_Y-SLAB_H,0);scene.add(chamfer);
+  var legPositions=[[LEG_DIST,LEG_DIST],[-LEG_DIST,LEG_DIST],[LEG_DIST,-LEG_DIST],[-LEG_DIST,-LEG_DIST]];
   function buildLeg(px,pz){
     var group=new THREE.Group();
-    var segs=[{r:LEG_R*1.5,h:0.18,y:0},{r:LEG_R*1.1,h:0.35,y:0.18},{r:LEG_R*0.8,h:LEG_H*0.5,y:0.53},{r:LEG_R*1.05,h:0.2,y:0.53+LEG_H*0.5},{r:LEG_R*0.85,h:LEG_H*0.35,y:0.73+LEG_H*0.5},{r:LEG_R*1.3,h:0.22,y:0.73+LEG_H*0.85}];
-    segs.forEach(function(s){
+    [{r:LEG_R*1.5,h:0.18,y:0},{r:LEG_R*1.1,h:0.35,y:0.18},{r:LEG_R*0.8,h:LEG_H*0.5,y:0.53},{r:LEG_R*1.05,h:0.2,y:0.53+LEG_H*0.5},{r:LEG_R*0.85,h:LEG_H*0.35,y:0.73+LEG_H*0.5},{r:LEG_R*1.3,h:0.22,y:0.73+LEG_H*0.85}].forEach(function(s){
       var m=new THREE.Mesh(new THREE.CylinderGeometry(s.r,s.r,s.h,16),woodMatLeg);
-      m.position.y=s.y+s.h/2; group.add(m);
+      m.position.y=s.y+s.h/2;group.add(m);
     });
-    group.position.set(px,TABLE_Y-SLAB_H-LEG_H,pz); scene.add(group);
+    group.position.set(px,TABLE_Y-SLAB_H-LEG_H,pz);scene.add(group);
   }
   legPositions.forEach(function(lp){buildLeg(lp[0],lp[1]);});
   function buildStretcher(x1,z1,x2,z2){
     var dx=x2-x1,dz=z2-z1,len=Math.sqrt(dx*dx+dz*dz),angle=Math.atan2(dz,dx);
-    var mesh=new THREE.Mesh(new THREE.CylinderGeometry(LEG_R*0.55,LEG_R*0.55,len,10),woodMatLeg);
-    mesh.rotation.z=Math.PI/2; mesh.rotation.y=-angle;
-    mesh.position.set((x1+x2)/2,TABLE_Y-SLAB_H-LEG_H*0.38,(z1+z2)/2); scene.add(mesh);
+    var m=new THREE.Mesh(new THREE.CylinderGeometry(LEG_R*0.55,LEG_R*0.55,len,10),woodMatLeg);
+    m.rotation.z=Math.PI/2;m.rotation.y=-angle;
+    m.position.set((x1+x2)/2,TABLE_Y-SLAB_H-LEG_H*0.38,(z1+z2)/2);scene.add(m);
   }
-  buildStretcher( LEG_DIST, LEG_DIST,-LEG_DIST, LEG_DIST);
-  buildStretcher(-LEG_DIST,-LEG_DIST, LEG_DIST,-LEG_DIST);
-  buildStretcher( LEG_DIST, LEG_DIST, LEG_DIST,-LEG_DIST);
-  buildStretcher(-LEG_DIST, LEG_DIST,-LEG_DIST,-LEG_DIST);
+  buildStretcher(LEG_DIST,LEG_DIST,-LEG_DIST,LEG_DIST);
+  buildStretcher(-LEG_DIST,-LEG_DIST,LEG_DIST,-LEG_DIST);
+  buildStretcher(LEG_DIST,LEG_DIST,LEG_DIST,-LEG_DIST);
+  buildStretcher(-LEG_DIST,LEG_DIST,-LEG_DIST,-LEG_DIST);
   var ring=new THREE.Mesh(new THREE.RingGeometry(2.6,2.7,72),new THREE.MeshBasicMaterial({color:0x4fd6c4,side:THREE.DoubleSide,transparent:true,opacity:0.35}));
-  ring.rotation.x=-Math.PI/2; ring.position.y=TABLE_Y+0.02; scene.add(ring);
+  ring.rotation.x=-Math.PI/2;ring.position.y=TABLE_Y+0.02;scene.add(ring);
   var ring2=new THREE.Mesh(new THREE.RingGeometry(4.2,4.28,72),new THREE.MeshBasicMaterial({color:0x9b63cf,side:THREE.DoubleSide,transparent:true,opacity:0.18}));
-  ring2.rotation.x=-Math.PI/2; ring2.position.y=TABLE_Y+0.02; scene.add(ring2);
+  ring2.rotation.x=-Math.PI/2;ring2.position.y=TABLE_Y+0.02;scene.add(ring2);
 }
 
 // ─── Física ───────────────────────────────────────────────────────────────
 function initPhysics(){
   var world=new CANNON.World();
-  world.gravity.set(0,-38,0);
+  // Gravidade reduzida para dar mais tempo de quique no ar
+  world.gravity.set(0,-28,0);
   world.broadphase=new CANNON.NaiveBroadphase();
   world.solver.iterations=20;
   world.allowSleep=true;
-  var diceMat=new CANNON.Material('dice'), floorMat=new CANNON.Material('floor');
-  world.addContactMaterial(new CANNON.ContactMaterial(diceMat,floorMat,{friction:0.82,restitution:0.14}));
-  world.addContactMaterial(new CANNON.ContactMaterial(diceMat,diceMat,{friction:0.6,restitution:0.12}));
+  var diceMat=new CANNON.Material('dice'),floorMat=new CANNON.Material('floor');
+  // Restitution 0.60: quique bem visivelmente alto, como dados de resina reais
+  world.addContactMaterial(new CANNON.ContactMaterial(diceMat,floorMat,{friction:0.55,restitution:0.60}));
+  world.addContactMaterial(new CANNON.ContactMaterial(diceMat,diceMat,{friction:0.4, restitution:0.45}));
   S.diceMat=diceMat; S.floorMat=floorMat;
   var floor=new CANNON.Body({mass:0,material:floorMat});
   floor.addShape(new CANNON.Plane());
@@ -453,7 +437,7 @@ function clearDice(){
   S.dice=[];
 }
 
-// ─── Câmera: zoom sequencial ──────────────────────────────────────────────
+// ─── Câmera zoom ─────────────────────────────────────────────────────────────
 function startRevealSequence(){
   S.revealQueue=S.dice.slice();
   engineStatus.textContent='Revelando resultado…';
@@ -473,7 +457,7 @@ function nextReveal(){
   S.camToLook=focus.clone().add(new THREE.Vector3(0,0.2,0));
 }
 
-// ─── Resultado final (após zoom completo) ─────────────────────────────────
+// ─── Resultado final ─────────────────────────────────────────────────────────
 function showFinalResult(){
   diceResultsGrid.innerHTML='';
   Object.keys(S.pendingByType).sort(function(a,b){return a-b;}).forEach(function(s){
@@ -488,11 +472,11 @@ function showFinalResult(){
   resultTotalVal.textContent=S.pendingTotal;
   resultTotalRow.style.display='flex';
   showMagicReveal(S.pendingTotal, S.pendingParts);
-  sndResult(); // ✨ som de resultado
+  sndResult();
   engineStatus.textContent='Dado parou — veja o resultado';
 }
 function calcResults(){
-  var byType={}, total=0;
+  var byType={},total=0;
   S.dice.forEach(function(d){
     var face=getTopFace(d.mesh);
     if(!byType[d.sides]) byType[d.sides]=[];
@@ -506,14 +490,13 @@ function calcResults(){
 }
 function revealResults(){
   if(S.suspenseTimer){clearInterval(S.suspenseTimer);S.suspenseTimer=null;}
-  sndRollStop(); // para o loop de rolagem
-  sndHit();      // som de impacto final
+  sndRollStop();
   calcResults();
   startRevealSequence();
 }
 
 // ─── Overlay mágico ──────────────────────────────────────────────────────
-function showMagicReveal(total, subtitle){
+function showMagicReveal(total,subtitle){
   var overlay=document.getElementById('reveal-overlay');
   var numEl=document.getElementById('reveal-number');
   var subEl=document.getElementById('reveal-subtitle');
@@ -521,7 +504,7 @@ function showMagicReveal(total, subtitle){
   numEl.textContent=total; subEl.textContent=subtitle; sparklesEl.innerHTML='';
   for(var i=0;i<20;i++){
     var dot=document.createElement('div'); dot.className='sparkle-dot';
-    var angle=(i/20)*Math.PI*2, dist=70+Math.random()*90;
+    var angle=(i/20)*Math.PI*2,dist=70+Math.random()*90;
     dot.style.setProperty('--tx',Math.cos(angle)*dist+'px');
     dot.style.setProperty('--ty',Math.sin(angle)*dist+'px');
     dot.style.setProperty('--tr',(Math.random()*360)+'deg');
@@ -532,17 +515,15 @@ function showMagicReveal(total, subtitle){
   overlay.classList.remove('fadeout'); overlay.classList.add('active');
   setTimeout(function(){
     overlay.classList.add('fadeout');
-    setTimeout(function(){ overlay.classList.remove('active','fadeout'); },500);
+    setTimeout(function(){overlay.classList.remove('active','fadeout');},500);
   },3200);
 }
 
 // ─── Verificar se dado parou ─────────────────────────────────────────────
 function isDiceStopped(body){
   if(body.sleepState===2) return true;
-  var av=body.angularVelocity, lv=body.velocity;
-  var angSpeed=Math.sqrt(av.x*av.x+av.y*av.y+av.z*av.z);
-  var linSpeed=Math.sqrt(lv.x*lv.x+lv.y*lv.y+lv.z*lv.z);
-  return angSpeed<0.4 && linSpeed<0.3;
+  var av=body.angularVelocity,lv=body.velocity;
+  return Math.sqrt(av.x*av.x+av.y*av.y+av.z*av.z)<0.4 && Math.sqrt(lv.x*lv.x+lv.y*lv.y+lv.z*lv.z)<0.3;
 }
 
 // ─── Lançar dados ─────────────────────────────────────────────────────────
@@ -550,8 +531,12 @@ function rollPool(){
   if(!S.scene||!S.world) return;
   var keys=Object.keys(S.pool).filter(function(k){return S.pool[k]>0;});
   if(!keys.length){engineStatus.textContent='Adicione dados ao pool primeiro!';return;}
+
+  // ★ AudioContext CRIADO AQUI dentro do handler de clique (user gesture)
+  initAC();
+
   if(S.suspenseTimer){clearInterval(S.suspenseTimer);S.suspenseTimer=null;}
-  sndRollStop(); // garante que não há loop residual
+  sndRollStop();
   clearDice();
 
   S.camPhase='idle'; S.camera.position.copy(CAM_HOME); S.camLook.copy(CAM_LOOK_HOME);
@@ -566,44 +551,50 @@ function rollPool(){
   diceResultsGrid.innerHTML='<p class="no-result">Rolando…</p>';
   resultTotalRow.style.display='none';
 
-  // Sons de arremesso
+  // Som de arremesso
   sndThrow();
-  setTimeout(sndRollStart, 180); // loop de rolagem começa logo após o swoosh
+  setTimeout(sndRollStart, 200);
 
   diceList.forEach(function(sides,idx){
     var geo=geomFor(sides);
     var mesh=new THREE.Mesh(geo,materialsFor(sides));
 
-    // Alta altitude + posição espalhada
-    var startX=(Math.random()-.5)*2.8;
-    var startY=4.5+idx*0.7;
-    var startZ=(Math.random()-.5)*2.8;
+    var startX=(Math.random()-.5)*2.4;
+    var startY=4.5+idx*0.65;
+    var startZ=(Math.random()-.5)*2.4;
     mesh.position.set(startX,startY,startZ);
 
     var body=new CANNON.Body({
       mass:0.4, material:S.diceMat,
-      linearDamping:0.28,   // baixo damping = muito deslizamento
-      angularDamping:0.55,
-      allowSleep:true, sleepSpeedLimit:0.25, sleepTimeLimit:0.6,
+      linearDamping:0.25,   // pouco damping para deslizar após quique
+      angularDamping:0.50,
+      allowSleep:true, sleepSpeedLimit:0.2, sleepTimeLimit:0.7,
     });
-    body.addShape(sides===6 ? new CANNON.Box(new CANNON.Vec3(0.6,0.6,0.6)) : new CANNON.Sphere(0.62));
+    body.addShape(sides===6?new CANNON.Box(new CANNON.Vec3(0.6,0.6,0.6)):new CANNON.Sphere(0.62));
     body.position.set(startX,startY,startZ);
-
     var eq=new CANNON.Quaternion();
     eq.setFromEuler(Math.random()*Math.PI*2,Math.random()*Math.PI*2,Math.random()*Math.PI*2);
     body.quaternion.copy(eq);
 
-    // Força total do arremesso: dobrada em relação à versão anterior
+    // Velocidade vertical alta garante quique visivelmente alto
     body.velocity.set(
-      (Math.random()-.5)*7.0,
-      -2.5,
-      (Math.random()-.5)*7.0
+      (Math.random()-.5)*6.0,
+      -4.5,   // energia suficiente para quicar alto após restitution=0.60
+      (Math.random()-.5)*6.0
     );
     body.angularVelocity.set(
-      (Math.random()-.5)*52,
-      (Math.random()-.5)*52,
-      (Math.random()-.5)*52
+      (Math.random()-.5)*48,
+      (Math.random()-.5)*48,
+      (Math.random()-.5)*48
     );
+
+    // ★ Som de quique a cada colisão com o chão/paredes
+    body.addEventListener('collide', function(e){
+      if(!S.rolling) return;
+      var rv = e.contact.getImpactVelocityAlongNormal();
+      var force = Math.abs(rv);
+      if(force > 0.8) sndBounce(force); // só colisões com impacto real
+    });
 
     S.world.addBody(body);
     S.scene.add(mesh);
@@ -638,7 +629,7 @@ function initScene(){
   var top=new THREE.DirectionalLight(0xc08060,0.4); top.position.set(0,10,0); scene.add(top);
   var under=new THREE.PointLight(0x2a1506,0.6,12); under.position.set(0,-1.5,0); scene.add(under);
   buildTable(scene);
-  var pg=new THREE.BufferGeometry(), pp=[], pCount=100;
+  var pg=new THREE.BufferGeometry(),pp=[],pCount=100;
   for(var i=0;i<pCount;i++) pp.push((Math.random()-.5)*13,(Math.random()-.5)*5+1.5,(Math.random()-.5)*11);
   pg.setAttribute('position',new THREE.Float32BufferAttribute(pp,3));
   S.particles=new THREE.Points(pg,new THREE.PointsMaterial({color:0xc8aaff,size:0.05,transparent:true,opacity:0.5,depthWrite:false}));
@@ -669,37 +660,33 @@ function animate(){
       S.world.step(1/120,dt,6);
     }
     S.lastStepTime=nowSec;
-    S.dice.forEach(function(d){
-      d.mesh.position.copy(d.body.position);
-      d.mesh.quaternion.copy(d.body.quaternion);
-    });
+    S.dice.forEach(function(d){d.mesh.position.copy(d.body.position); d.mesh.quaternion.copy(d.body.quaternion);});
     if(S.rolling){
       var elapsed=nowMs-S.rollStartTime;
-      var pastMin=elapsed>MIN_ROLL_MS, pastMax=elapsed>MAX_ROLL_MS;
+      var pastMin=elapsed>MIN_ROLL_MS,pastMax=elapsed>MAX_ROLL_MS;
       if(pastMin||pastMax){
         var allStopped=S.dice.length>0&&S.dice.every(function(d){return isDiceStopped(d.body);});
         if(allStopped||pastMax){
-          if(pastMax){ S.dice.forEach(function(d){ d.body.velocity.set(0,0,0); d.body.angularVelocity.set(0,0,0); d.body.sleep(); }); }
+          if(pastMax){S.dice.forEach(function(d){d.body.velocity.set(0,0,0);d.body.angularVelocity.set(0,0,0);d.body.sleep();});}
           S.rolling=false;
           revealResults();
         }
       }
     }
   }
-  // Câmera
-  var cp=S.camPhase, ct, ot;
+  var cp=S.camPhase,ct,ot;
   if(cp==='zoomIn'){
     ct=Math.min(1,(nowMs-S.camPhaseStart)/900);
     S.camera.position.lerpVectors(S.camFromPos,S.camToPos,easeInOutCubic(ct));
     S.camLook.lerpVectors(S.camFromLook,S.camToLook,easeInOutCubic(ct));
-    if(ct>=1){S.camPhase='hold'; S.camPhaseStart=nowMs;}
+    if(ct>=1){S.camPhase='hold';S.camPhaseStart=nowMs;}
   } else if(cp==='hold'){
     if(nowMs-S.camPhaseStart>=(S.revealQueue&&S.revealQueue.length?1400:1800)) nextReveal();
   } else if(cp==='zoomOut'){
     ot=Math.min(1,(nowMs-S.camPhaseStart)/1100);
     S.camera.position.lerpVectors(S.camFromPos,CAM_HOME,easeInOutCubic(ot));
     S.camLook.lerpVectors(S.camFromLook,CAM_LOOK_HOME,easeInOutCubic(ot));
-    if(ot>=1){ S.camPhase='idle'; showFinalResult(); }
+    if(ot>=1){S.camPhase='idle'; showFinalResult();}
   }
   S.camera.lookAt(S.camLook);
   S.renderer.render(S.scene,S.camera);
