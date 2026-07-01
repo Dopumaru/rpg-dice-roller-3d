@@ -44,14 +44,12 @@ var S = {
   pendingTotal: 0, pendingParts: '', pendingByType: {},
 };
 
-// ─────────────────────────────────────────────────────────────────────────
-// ─── SISTEMA DE SOM ─────────────────────────────────────────────────────────
-// IMPORTANTE: AudioContext DEVE ser criado/resumido dentro de um
-// handler de clique do usuário. Criado fora bloqueia no Chrome/Safari.
-// ─────────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// SISTEMA DE SOM — Web Audio API procedural
+// AudioContext criado DENTRO do clique (obrigatório Chrome/Safari)
+// ══════════════════════════════════════════════════════════════════════════
 var AC = null;
 
-// Chamado UMA vez dentro do clique do botão rolar (user gesture garantido)
 function initAC() {
   if (!AC) {
     try { AC = new (window.AudioContext || window.webkitAudioContext)(); }
@@ -59,95 +57,196 @@ function initAC() {
   }
   if (AC.state === 'suspended') AC.resume();
 }
-
 function getAC() { return AC; }
 
-// Som de arremesso — swoosh (ruído branco filtrado com decay)
-function sndThrow() {
-  var ac = getAC(); if (!ac) return;
-  var buf = ac.createBuffer(1, ac.sampleRate * 0.4, ac.sampleRate);
+// ── Utilitário: cria um buffer de ruído branco ────────────────────────────
+function makeNoiseBuffer(ac, dur) {
+  var len = Math.floor(ac.sampleRate * dur);
+  var buf = ac.createBuffer(1, len, ac.sampleRate);
   var d = buf.getChannelData(0);
-  for (var i = 0; i < d.length; i++)
-    d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 1.6);
-  var src  = ac.createBufferSource(); src.buffer = buf;
-  var filt = ac.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=1600; filt.Q.value=0.7;
-  var gain = ac.createGain();
-  gain.gain.setValueAtTime(0.45, ac.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.4);
-  src.connect(filt); filt.connect(gain); gain.connect(ac.destination);
-  src.start();
+  for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
 }
 
-// Loop de rolagem — chacoalhar contínuo
-var _rollSrc = null, _rollGain = null;
+// ── ARREMESSO — whoosh grave + fricção de mão ────────────────────────────
+// Inspirado em foley de RPG: som de punho sacudindo dados antes de jogar
+function sndThrow() {
+  var ac = getAC(); if (!ac) return;
+  var now = ac.currentTime;
+
+  // Camada 1: whoosh grave — oscilador com pitch glide rápido
+  var osc = ac.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(180, now);
+  osc.frequency.exponentialRampToValueAtTime(55, now + 0.28);
+  var gOsc = ac.createGain();
+  gOsc.gain.setValueAtTime(0, now);
+  gOsc.gain.linearRampToValueAtTime(0.18, now + 0.04);
+  gOsc.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+  // lowpass para suavizar o sawtooth
+  var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 400;
+  osc.connect(lp); lp.connect(gOsc); gOsc.connect(ac.destination);
+  osc.start(now); osc.stop(now + 0.35);
+
+  // Camada 2: ruído médio-agudo (fricção dos dados na mão)
+  var src = ac.createBufferSource();
+  src.buffer = makeNoiseBuffer(ac, 0.38);
+  var bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+  bp.frequency.setValueAtTime(2200, now);
+  bp.frequency.exponentialRampToValueAtTime(600, now + 0.38);
+  bp.Q.value = 1.4;
+  var gN = ac.createGain();
+  gN.gain.setValueAtTime(0, now);
+  gN.gain.linearRampToValueAtTime(0.22, now + 0.05);
+  gN.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+  src.connect(bp); bp.connect(gN); gN.connect(ac.destination);
+  src.start(now);
+
+  // Camada 3: "clatter" — 3 cliques rápidos imitando dados batendo entre si
+  [0.06, 0.13, 0.21].forEach(function(dt) {
+    var c = ac.createOscillator(); c.type = 'square';
+    c.frequency.setValueAtTime(900 + Math.random()*400, now + dt);
+    c.frequency.exponentialRampToValueAtTime(120, now + dt + 0.06);
+    var gc = ac.createGain();
+    gc.gain.setValueAtTime(0.10, now + dt);
+    gc.gain.exponentialRampToValueAtTime(0.001, now + dt + 0.07);
+    var lpc = ac.createBiquadFilter(); lpc.type = 'lowpass'; lpc.frequency.value = 1800;
+    c.connect(lpc); lpc.connect(gc); gc.connect(ac.destination);
+    c.start(now + dt); c.stop(now + dt + 0.09);
+  });
+}
+
+// ── ROLAGEM EM LOOP — 3 camadas sobrepostas ───────────────────────────────
+// Imita dados de resina rolando em feltro: grave (massa), médio (superfície),
+// agudo (arestas)
+var _rollNodes = [];
 function sndRollStart() {
   var ac = getAC(); if (!ac) return;
   sndRollStop();
-  var dur = 0.5;
-  var buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+  var sr = ac.sampleRate;
+  // Buffer de 1s com 3 camadas misturadas para loop suave
+  var dur = 1.0;
+  var len = Math.floor(sr * dur);
+  var buf = ac.createBuffer(1, len, sr);
   var d = buf.getChannelData(0);
-  for (var i = 0; i < d.length; i++) {
-    var env = Math.sin(Math.PI * (i / d.length));
-    d[i] = (Math.random()*2-1) * env * 0.7;
+  for (var i = 0; i < len; i++) {
+    var t = i / sr;
+    // Grave: pancadas periódicas simulando faces batendo no feltro
+    var hits = 0;
+    for (var h = 0; h < 9; h++) {
+      var ht = h * (dur / 9);
+      var dt = t - ht;
+      if (dt >= 0 && dt < 0.055)
+        hits += Math.exp(-dt * 38) * Math.sin(2 * Math.PI * 140 * dt) * 0.55;
+    }
+    // Médio: ruído filtrado (chocalhar contínuo)
+    var rnd = Math.random() * 2 - 1;
+    // Agudo: pequenos cliques de arestas
+    var edge = 0;
+    for (var e = 0; e < 18; e++) {
+      var et = e * (dur / 18) + 0.027;
+      var de = t - et;
+      if (de >= 0 && de < 0.018)
+        edge += (Math.random()*2-1) * Math.exp(-de * 120) * 0.3;
+    }
+    // Envelope de fade-in/out para loop sem clique
+    var env = Math.sin(Math.PI * (i / len));
+    d[i] = (hits + rnd * 0.25 + edge) * env * 0.72;
   }
-  var src  = ac.createBufferSource(); src.buffer = buf; src.loop = true;
-  var filt = ac.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=1000; filt.Q.value=1.0;
-  var gain = ac.createGain(); gain.gain.setValueAtTime(0.28, ac.currentTime);
-  src.connect(filt); filt.connect(gain); gain.connect(ac.destination);
+
+  var src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+
+  // EQ: corta sub-grave e extremo agudo para parecer feltro (não metal)
+  var hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90;
+  var lp = ac.createBiquadFilter(); lp.type = 'lowpass';  lp.frequency.value = 5500;
+  // Leve compressão dinâmica para nivelar as pancadas
+  var comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -22; comp.knee.value = 8;
+  comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.12;
+
+  var gain = ac.createGain(); gain.gain.setValueAtTime(0, ac.currentTime);
+  gain.gain.linearRampToValueAtTime(0.55, ac.currentTime + 0.18);
+
+  src.connect(hp); hp.connect(lp); lp.connect(comp); comp.connect(gain); gain.connect(ac.destination);
   src.start();
-  _rollSrc = src; _rollGain = gain;
+  _rollNodes = [src, gain];
 }
 function sndRollStop() {
-  if (!_rollSrc) return;
-  try {
-    var ac = getAC();
-    if (_rollGain && ac) {
-      _rollGain.gain.setValueAtTime(_rollGain.gain.value, ac.currentTime);
-      _rollGain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.35);
-    }
-    var s = _rollSrc;
-    setTimeout(function(){ try { s.stop(); } catch(e){} }, 400);
-  } catch(e) {}
-  _rollSrc = null; _rollGain = null;
+  if (!_rollNodes.length) return;
+  var ac = getAC();
+  var gain = _rollNodes[1];
+  var src  = _rollNodes[0];
+  if (ac && gain) {
+    gain.gain.setValueAtTime(gain.gain.value, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.30);
+  }
+  setTimeout(function(){ try { src.stop(); } catch(e){} }, 340);
+  _rollNodes = [];
 }
 
-// Quique / impacto — percussão curta (chama a cada colisão forte)
+// ── QUIQUE / IMPACTO — 4 camadas proporcional à força ────────────────────
+// Força ~1–3: quique leve (apenas clique)  |  força >5: impacto pesado completo
 var _lastBounceTime = 0;
 function sndBounce(force) {
   var ac = getAC(); if (!ac) return;
   var now = ac.currentTime;
-  // Debounce: no máximo 1 som a cada 80ms para não saturar
-  if (now - _lastBounceTime < 0.08) return;
+  if (now - _lastBounceTime < 0.07) return; // debounce 70ms
   _lastBounceTime = now;
 
-  var vol = Math.min(1.0, (force || 1) * 0.12);
+  var f = Math.min(force || 1, 12);
+  var vol = 0.15 + (f / 12) * 0.72; // volume escala com a força
 
-  // Corpo do impacto: oscilador com pitch drop
-  var osc = ac.createOscillator();
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(280, now);
-  osc.frequency.exponentialRampToValueAtTime(55, now + 0.15);
-  var gOsc = ac.createGain();
-  gOsc.gain.setValueAtTime(vol * 0.7, now);
-  gOsc.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-  osc.connect(gOsc); gOsc.connect(ac.destination);
-  osc.start(now); osc.stop(now + 0.22);
+  // Camada 1: Sub-punch (dá peso ao impacto)
+  if (f > 2) {
+    var sub = ac.createOscillator(); sub.type = 'sine';
+    sub.frequency.setValueAtTime(95, now);
+    sub.frequency.exponentialRampToValueAtTime(30, now + 0.09);
+    var gSub = ac.createGain();
+    gSub.gain.setValueAtTime(vol * 0.55, now);
+    gSub.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    sub.connect(gSub); gSub.connect(ac.destination);
+    sub.start(now); sub.stop(now + 0.14);
+  }
 
-  // Camada de clique agudo (textura de feltro/madeira)
-  var len = Math.floor(ac.sampleRate * 0.09);
-  var buf = ac.createBuffer(1, len, ac.sampleRate);
-  var d   = buf.getChannelData(0);
-  for (var i = 0; i < len; i++) d[i] = (Math.random()*2-1) * (1 - i/len);
-  var ns   = ac.createBufferSource(); ns.buffer = buf;
-  var filt = ac.createBiquadFilter(); filt.type='bandpass'; filt.frequency.value=3500; filt.Q.value=1.5;
-  var gNs  = ac.createGain();
-  gNs.gain.setValueAtTime(vol * 0.5, now);
-  gNs.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
-  ns.connect(filt); filt.connect(gNs); gNs.connect(ac.destination);
+  // Camada 2: Corpo do impacto (oscilador médio com pitch drop)
+  var body = ac.createOscillator(); body.type = 'triangle';
+  body.frequency.setValueAtTime(260 + f * 8, now);
+  body.frequency.exponentialRampToValueAtTime(48, now + 0.14);
+  var gBody = ac.createGain();
+  gBody.gain.setValueAtTime(vol * 0.65, now);
+  gBody.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+  body.connect(gBody); gBody.connect(ac.destination);
+  body.start(now); body.stop(now + 0.20);
+
+  // Camada 3: Clique de arestas (ruído curto highpass — "tac")
+  var noiseLen = Math.floor(ac.sampleRate * 0.06);
+  var nBuf = ac.createBuffer(1, noiseLen, ac.sampleRate);
+  var nd = nBuf.getChannelData(0);
+  for (var i = 0; i < noiseLen; i++) nd[i] = (Math.random()*2-1) * Math.pow(1 - i/noiseLen, 2.2);
+  var ns = ac.createBufferSource(); ns.buffer = nBuf;
+  var hp2 = ac.createBiquadFilter(); hp2.type = 'highpass'; hp2.frequency.value = 2800;
+  var bp2 = ac.createBiquadFilter(); bp2.type = 'peaking'; bp2.frequency.value = 4500; bp2.gain.value = 9; bp2.Q.value = 1.2;
+  var gNs = ac.createGain();
+  gNs.gain.setValueAtTime(vol * 0.48, now);
+  gNs.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+  ns.connect(hp2); hp2.connect(bp2); bp2.connect(gNs); gNs.connect(ac.destination);
   ns.start(now);
+
+  // Camada 4: Reverb curto (pre-delay + decay) dá sensação de espaço na mesa
+  if (f > 3) {
+    var rvBuf = makeNoiseBuffer(ac, 0.18);
+    var rvSrc = ac.createBufferSource(); rvSrc.buffer = rvBuf;
+    var rvBp = ac.createBiquadFilter(); rvBp.type = 'bandpass'; rvBp.frequency.value = 900; rvBp.Q.value = 0.7;
+    var rvG = ac.createGain();
+    rvG.gain.setValueAtTime(0, now + 0.012);
+    rvG.gain.linearRampToValueAtTime(vol * 0.12, now + 0.025);
+    rvG.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    rvSrc.connect(rvBp); rvBp.connect(rvG); rvG.connect(ac.destination);
+    rvSrc.start(now + 0.012);
+  }
 }
 
-// Acorde mágico de resultado
+// ── RESULTADO — acorde mágico (preservado) ────────────────────────────────
 function sndResult() {
   var ac = getAC(); if (!ac) return;
   var freqs = [293.66, 329.63, 392.00, 493.88];
@@ -404,13 +503,11 @@ function buildTable(scene){
 // ─── Física ───────────────────────────────────────────────────────────────
 function initPhysics(){
   var world=new CANNON.World();
-  // Gravidade reduzida para dar mais tempo de quique no ar
   world.gravity.set(0,-28,0);
   world.broadphase=new CANNON.NaiveBroadphase();
   world.solver.iterations=20;
   world.allowSleep=true;
   var diceMat=new CANNON.Material('dice'),floorMat=new CANNON.Material('floor');
-  // Restitution 0.60: quique bem visivelmente alto, como dados de resina reais
   world.addContactMaterial(new CANNON.ContactMaterial(diceMat,floorMat,{friction:0.55,restitution:0.60}));
   world.addContactMaterial(new CANNON.ContactMaterial(diceMat,diceMat,{friction:0.4, restitution:0.45}));
   S.diceMat=diceMat; S.floorMat=floorMat;
@@ -532,8 +629,7 @@ function rollPool(){
   var keys=Object.keys(S.pool).filter(function(k){return S.pool[k]>0;});
   if(!keys.length){engineStatus.textContent='Adicione dados ao pool primeiro!';return;}
 
-  // ★ AudioContext CRIADO AQUI dentro do handler de clique (user gesture)
-  initAC();
+  initAC(); // AudioContext dentro do clique
 
   if(S.suspenseTimer){clearInterval(S.suspenseTimer);S.suspenseTimer=null;}
   sndRollStop();
@@ -551,9 +647,8 @@ function rollPool(){
   diceResultsGrid.innerHTML='<p class="no-result">Rolando…</p>';
   resultTotalRow.style.display='none';
 
-  // Som de arremesso
   sndThrow();
-  setTimeout(sndRollStart, 200);
+  setTimeout(sndRollStart, 220);
 
   diceList.forEach(function(sides,idx){
     var geo=geomFor(sides);
@@ -566,7 +661,7 @@ function rollPool(){
 
     var body=new CANNON.Body({
       mass:0.4, material:S.diceMat,
-      linearDamping:0.25,   // pouco damping para deslizar após quique
+      linearDamping:0.25,
       angularDamping:0.50,
       allowSleep:true, sleepSpeedLimit:0.2, sleepTimeLimit:0.7,
     });
@@ -576,10 +671,9 @@ function rollPool(){
     eq.setFromEuler(Math.random()*Math.PI*2,Math.random()*Math.PI*2,Math.random()*Math.PI*2);
     body.quaternion.copy(eq);
 
-    // Velocidade vertical alta garante quique visivelmente alto
     body.velocity.set(
       (Math.random()-.5)*6.0,
-      -4.5,   // energia suficiente para quicar alto após restitution=0.60
+      -4.5,
       (Math.random()-.5)*6.0
     );
     body.angularVelocity.set(
@@ -588,12 +682,10 @@ function rollPool(){
       (Math.random()-.5)*48
     );
 
-    // ★ Som de quique a cada colisão com o chão/paredes
     body.addEventListener('collide', function(e){
       if(!S.rolling) return;
-      var rv = e.contact.getImpactVelocityAlongNormal();
-      var force = Math.abs(rv);
-      if(force > 0.8) sndBounce(force); // só colisões com impacto real
+      var force = Math.abs(e.contact.getImpactVelocityAlongNormal());
+      if(force > 0.8) sndBounce(force);
     });
 
     S.world.addBody(body);
