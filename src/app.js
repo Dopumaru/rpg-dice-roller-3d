@@ -45,11 +45,16 @@ var S = {
 };
 
 // ══════════════════════════════════════════════════════════════════════════
-// SISTEMA DE SOM — Web Audio API procedural
-// AudioContext criado DENTRO do clique (obrigatório Chrome/Safari)
+// SISTEMA DE SOM
+// AudioContext criado DENTRO do clique (obrigatório Chrome/Safari).
+// Sons reais carregados de src/sounds/*.ogg via fetch/decodeAudioData.
+// Se o arquivo não existir, a função simplesmente não toca nada.
 // ══════════════════════════════════════════════════════════════════════════
 var AC = null;
+// Dicionário de AudioBuffer decodificados: { throw, rolling, hit }
+var _bufs = {};
 
+// Chamado 1× dentro de rollPool() (user gesture)
 function initAC() {
   if (!AC) {
     try { AC = new (window.AudioContext || window.webkitAudioContext)(); }
@@ -59,133 +64,87 @@ function initAC() {
 }
 function getAC() { return AC; }
 
-// ── Utilitário: cria um buffer de ruído branco ────────────────────────────
-function makeNoiseBuffer(ac, dur) {
-  var len = Math.floor(ac.sampleRate * dur);
-  var buf = ac.createBuffer(1, len, ac.sampleRate);
-  var d = buf.getChannelData(0);
-  for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-  return buf;
+// Carrega um arquivo .ogg e decodifica. Chamado no initScene().
+// Não bloqueia — se falhar (404 etc.) simplesmente não guarda o buffer.
+function loadSound(name, url) {
+  // Precisamos de um AC temporário para decodificar fora do clique.
+  // Não toca nada, apenas decodifica e guarda o buffer.
+  var tempAC;
+  try { tempAC = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch(e) { return; }
+  fetch(url)
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.arrayBuffer();
+    })
+    .then(function(ab) {
+      return tempAC.decodeAudioData(ab);
+    })
+    .then(function(decoded) {
+      _bufs[name] = decoded;
+      // Fecha o AC temporário depois de decodificar
+      if (tempAC.state !== 'closed') tempAC.close();
+    })
+    .catch(function(e) {
+      // Arquivo não encontrado ou formato inválido — ignora silenciosamente
+      try { tempAC.close(); } catch(_) {}
+    });
 }
 
-// ── ARREMESSO — whoosh grave + fricção de mão ────────────────────────────
-// Inspirado em foley de RPG: som de punho sacudindo dados antes de jogar
-function sndThrow() {
-  var ac = getAC(); if (!ac) return;
-  var now = ac.currentTime;
-
-  // Camada 1: whoosh grave — oscilador com pitch glide rápido
-  var osc = ac.createOscillator();
-  osc.type = 'sawtooth';
-  osc.frequency.setValueAtTime(180, now);
-  osc.frequency.exponentialRampToValueAtTime(55, now + 0.28);
-  var gOsc = ac.createGain();
-  gOsc.gain.setValueAtTime(0, now);
-  gOsc.gain.linearRampToValueAtTime(0.18, now + 0.04);
-  gOsc.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
-  // lowpass para suavizar o sawtooth
-  var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 400;
-  osc.connect(lp); lp.connect(gOsc); gOsc.connect(ac.destination);
-  osc.start(now); osc.stop(now + 0.35);
-
-  // Camada 2: ruído médio-agudo (fricção dos dados na mão)
+// Dispara um buffer já decodificado.
+// vol: volume (0–1), rate: playbackRate (pitch), loop: booleano
+// Retorna o nó { src, gain } para que o chamador possa parar o loop.
+function playBuffer(name, vol, rate, loop) {
+  var ac = getAC(); if (!ac) return null;
+  var buf = _bufs[name]; if (!buf) return null;
   var src = ac.createBufferSource();
-  src.buffer = makeNoiseBuffer(ac, 0.38);
-  var bp = ac.createBiquadFilter(); bp.type = 'bandpass';
-  bp.frequency.setValueAtTime(2200, now);
-  bp.frequency.exponentialRampToValueAtTime(600, now + 0.38);
-  bp.Q.value = 1.4;
-  var gN = ac.createGain();
-  gN.gain.setValueAtTime(0, now);
-  gN.gain.linearRampToValueAtTime(0.22, now + 0.05);
-  gN.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
-  src.connect(bp); bp.connect(gN); gN.connect(ac.destination);
-  src.start(now);
-
-  // Camada 3: "clatter" — 3 cliques rápidos imitando dados batendo entre si
-  [0.06, 0.13, 0.21].forEach(function(dt) {
-    var c = ac.createOscillator(); c.type = 'square';
-    c.frequency.setValueAtTime(900 + Math.random()*400, now + dt);
-    c.frequency.exponentialRampToValueAtTime(120, now + dt + 0.06);
-    var gc = ac.createGain();
-    gc.gain.setValueAtTime(0.10, now + dt);
-    gc.gain.exponentialRampToValueAtTime(0.001, now + dt + 0.07);
-    var lpc = ac.createBiquadFilter(); lpc.type = 'lowpass'; lpc.frequency.value = 1800;
-    c.connect(lpc); lpc.connect(gc); gc.connect(ac.destination);
-    c.start(now + dt); c.stop(now + dt + 0.09);
-  });
+  src.buffer = buf;
+  src.playbackRate.value = rate || 1.0;
+  src.loop = !!loop;
+  var gain = ac.createGain();
+  gain.gain.setValueAtTime(vol != null ? vol : 1.0, ac.currentTime);
+  src.connect(gain); gain.connect(ac.destination);
+  src.start();
+  return { src: src, gain: gain };
 }
 
-// ── ROLAGEM EM LOOP — 3 camadas sobrepostas ───────────────────────────────
-// Imita dados de resina rolando em feltro: grave (massa), médio (superfície),
-// agudo (arestas)
-var _rollNodes = [];
+// ── ARREMESSO ─────────────────────────────────────────────────────────────────
+// throw.ogg: som de dados sendo lançados / sacudidos na mão
+function sndThrow() {
+  // Pitch levemente aleatório para variar entre lances
+  var rate = 0.9 + Math.random() * 0.22;
+  playBuffer('throw', 0.85, rate, false);
+}
+
+// ── ROLAGEM EM LOOP ──────────────────────────────────────────────────────────
+// rolling.ogg: loop de dados rolando na mesa
+var _rollNode = null;
 function sndRollStart() {
-  var ac = getAC(); if (!ac) return;
   sndRollStop();
-  var sr = ac.sampleRate;
-  // Buffer de 1s com 3 camadas misturadas para loop suave
-  var dur = 1.0;
-  var len = Math.floor(sr * dur);
-  var buf = ac.createBuffer(1, len, sr);
-  var d = buf.getChannelData(0);
-  for (var i = 0; i < len; i++) {
-    var t = i / sr;
-    // Grave: pancadas periódicas simulando faces batendo no feltro
-    var hits = 0;
-    for (var h = 0; h < 9; h++) {
-      var ht = h * (dur / 9);
-      var dt = t - ht;
-      if (dt >= 0 && dt < 0.055)
-        hits += Math.exp(-dt * 38) * Math.sin(2 * Math.PI * 140 * dt) * 0.55;
-    }
-    // Médio: ruído filtrado (chocalhar contínuo)
-    var rnd = Math.random() * 2 - 1;
-    // Agudo: pequenos cliques de arestas
-    var edge = 0;
-    for (var e = 0; e < 18; e++) {
-      var et = e * (dur / 18) + 0.027;
-      var de = t - et;
-      if (de >= 0 && de < 0.018)
-        edge += (Math.random()*2-1) * Math.exp(-de * 120) * 0.3;
-    }
-    // Envelope de fade-in/out para loop sem clique
-    var env = Math.sin(Math.PI * (i / len));
-    d[i] = (hits + rnd * 0.25 + edge) * env * 0.72;
-  }
-
-  var src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
-
-  // EQ: corta sub-grave e extremo agudo para parecer feltro (não metal)
-  var hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 90;
-  var lp = ac.createBiquadFilter(); lp.type = 'lowpass';  lp.frequency.value = 5500;
-  // Leve compressão dinâmica para nivelar as pancadas
-  var comp = ac.createDynamicsCompressor();
-  comp.threshold.value = -22; comp.knee.value = 8;
-  comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.12;
-
-  var gain = ac.createGain(); gain.gain.setValueAtTime(0, ac.currentTime);
-  gain.gain.linearRampToValueAtTime(0.55, ac.currentTime + 0.18);
-
-  src.connect(hp); hp.connect(lp); lp.connect(comp); comp.connect(gain); gain.connect(ac.destination);
-  src.start();
-  _rollNodes = [src, gain];
+  var node = playBuffer('rolling', 0.0, 1.0, true);
+  if (!node) return;
+  // Fade-in suave
+  var ac = getAC();
+  node.gain.gain.setValueAtTime(0, ac.currentTime);
+  node.gain.gain.linearRampToValueAtTime(0.75, ac.currentTime + 0.25);
+  _rollNode = node;
 }
 function sndRollStop() {
-  if (!_rollNodes.length) return;
+  if (!_rollNode) return;
   var ac = getAC();
-  var gain = _rollNodes[1];
-  var src  = _rollNodes[0];
-  if (ac && gain) {
-    gain.gain.setValueAtTime(gain.gain.value, ac.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.30);
+  var node = _rollNode;
+  _rollNode = null;
+  if (ac && node.gain) {
+    node.gain.gain.setValueAtTime(node.gain.gain.value, ac.currentTime);
+    node.gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.35);
   }
-  setTimeout(function(){ try { src.stop(); } catch(e){} }, 340);
-  _rollNodes = [];
+  setTimeout(function() { try { node.src.stop(); } catch(e) {} }, 400);
 }
 
-// ── QUIQUE / IMPACTO — 4 camadas proporcional à força ────────────────────
-// Força ~1–3: quique leve (apenas clique)  |  força >5: impacto pesado completo
+// ── QUIQUE / IMPACTO ─────────────────────────────────────────────────────────
+// hit.ogg: impacto/quique de dado na mesa
+// playbackRate varia 0.8–1.3 aleatório → cada batida soa diferente
+// volume proporcional à força do impacto
 var _lastBounceTime = 0;
 function sndBounce(force) {
   var ac = getAC(); if (!ac) return;
@@ -193,60 +152,13 @@ function sndBounce(force) {
   if (now - _lastBounceTime < 0.07) return; // debounce 70ms
   _lastBounceTime = now;
 
-  var f = Math.min(force || 1, 12);
-  var vol = 0.15 + (f / 12) * 0.72; // volume escala com a força
-
-  // Camada 1: Sub-punch (dá peso ao impacto)
-  if (f > 2) {
-    var sub = ac.createOscillator(); sub.type = 'sine';
-    sub.frequency.setValueAtTime(95, now);
-    sub.frequency.exponentialRampToValueAtTime(30, now + 0.09);
-    var gSub = ac.createGain();
-    gSub.gain.setValueAtTime(vol * 0.55, now);
-    gSub.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-    sub.connect(gSub); gSub.connect(ac.destination);
-    sub.start(now); sub.stop(now + 0.14);
-  }
-
-  // Camada 2: Corpo do impacto (oscilador médio com pitch drop)
-  var body = ac.createOscillator(); body.type = 'triangle';
-  body.frequency.setValueAtTime(260 + f * 8, now);
-  body.frequency.exponentialRampToValueAtTime(48, now + 0.14);
-  var gBody = ac.createGain();
-  gBody.gain.setValueAtTime(vol * 0.65, now);
-  gBody.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-  body.connect(gBody); gBody.connect(ac.destination);
-  body.start(now); body.stop(now + 0.20);
-
-  // Camada 3: Clique de arestas (ruído curto highpass — "tac")
-  var noiseLen = Math.floor(ac.sampleRate * 0.06);
-  var nBuf = ac.createBuffer(1, noiseLen, ac.sampleRate);
-  var nd = nBuf.getChannelData(0);
-  for (var i = 0; i < noiseLen; i++) nd[i] = (Math.random()*2-1) * Math.pow(1 - i/noiseLen, 2.2);
-  var ns = ac.createBufferSource(); ns.buffer = nBuf;
-  var hp2 = ac.createBiquadFilter(); hp2.type = 'highpass'; hp2.frequency.value = 2800;
-  var bp2 = ac.createBiquadFilter(); bp2.type = 'peaking'; bp2.frequency.value = 4500; bp2.gain.value = 9; bp2.Q.value = 1.2;
-  var gNs = ac.createGain();
-  gNs.gain.setValueAtTime(vol * 0.48, now);
-  gNs.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
-  ns.connect(hp2); hp2.connect(bp2); bp2.connect(gNs); gNs.connect(ac.destination);
-  ns.start(now);
-
-  // Camada 4: Reverb curto (pre-delay + decay) dá sensação de espaço na mesa
-  if (f > 3) {
-    var rvBuf = makeNoiseBuffer(ac, 0.18);
-    var rvSrc = ac.createBufferSource(); rvSrc.buffer = rvBuf;
-    var rvBp = ac.createBiquadFilter(); rvBp.type = 'bandpass'; rvBp.frequency.value = 900; rvBp.Q.value = 0.7;
-    var rvG = ac.createGain();
-    rvG.gain.setValueAtTime(0, now + 0.012);
-    rvG.gain.linearRampToValueAtTime(vol * 0.12, now + 0.025);
-    rvG.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-    rvSrc.connect(rvBp); rvBp.connect(rvG); rvG.connect(ac.destination);
-    rvSrc.start(now + 0.012);
-  }
+  var f   = Math.min(force || 1, 12);
+  var vol = 0.18 + (f / 12) * 0.68;          // 0.18 (leve) a 0.86 (forte)
+  var rate = 0.80 + Math.random() * 0.50;    // 0.80 a 1.30
+  playBuffer('hit', vol, rate, false);
 }
 
-// ── RESULTADO — acorde mágico (preservado) ────────────────────────────────
+// ── RESULTADO — acorde mágico (síntese procedural, preservado) ─────────────
 function sndResult() {
   var ac = getAC(); if (!ac) return;
   var freqs = [293.66, 329.63, 392.00, 493.88];
@@ -629,7 +541,7 @@ function rollPool(){
   var keys=Object.keys(S.pool).filter(function(k){return S.pool[k]>0;});
   if(!keys.length){engineStatus.textContent='Adicione dados ao pool primeiro!';return;}
 
-  initAC(); // AudioContext dentro do clique
+  initAC();
 
   if(S.suspenseTimer){clearInterval(S.suspenseTimer);S.suspenseTimer=null;}
   sndRollStop();
@@ -648,7 +560,7 @@ function rollPool(){
   resultTotalRow.style.display='none';
 
   sndThrow();
-  setTimeout(sndRollStart, 220);
+  setTimeout(sndRollStart, 280);
 
   diceList.forEach(function(sides,idx){
     var geo=geomFor(sides);
@@ -705,6 +617,12 @@ rollBtn.addEventListener('click',rollPool);
 // ─── Cena Three.js ────────────────────────────────────────────────────────
 function getSize(){return{w:(shell&&shell.clientWidth)||800,h:(shell&&shell.clientHeight)||540};}
 function initScene(){
+  // Pré-carrega os sons reais assim que a página inicia
+  // (fetch não requer gesto do usuário, apenas decodeAudioData precisa de AC)
+  loadSound('throw',   'src/sounds/throw.ogg');
+  loadSound('rolling', 'src/sounds/rolling.ogg');
+  loadSound('hit',     'src/sounds/hit.ogg');
+
   var sz=getSize();
   var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
